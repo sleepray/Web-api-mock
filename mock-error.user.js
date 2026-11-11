@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         接口报错模拟
 // @namespace    https://github.com/sleepray/Web-api-mock
-// @version      1.10.1
+// @version      1.11.0
 // @description  按规则把指定接口的返回改成 500、超时、空数据等，用来测前端的异常处理。只在浏览器这一侧生效。
 // @match        *://*/*
 // @run-at       document-start
@@ -42,6 +42,7 @@
  * 记一下最近的请求，不改任何返回。不想让它出现的站点，在 Tampermonkey 该脚本的「设置 → 用户排除」里加。
  *
  * 规则存在当前域名的 localStorage 里，各站点互不影响；不往任何地方发数据。
+ * 最近的请求（含抓到的响应体）在离开页面时存进 sessionStorage，刷新后还在，关掉标签页就没了。
  * 必须 document-start + 在页面的 JS 环境里运行（@sandbox raw）：要赶在页面自己的脚本之前换掉 fetch。
  * 为了在 Tampermonkey 弹出菜单里加「显示 / 隐藏 Mock 按钮」声明了 GM_ 权限，所以页面的 window 要从
  * unsafeWindow 取（见下面的 W）。如果哪天规则不生效了，把头部的 @grant / @sandbox / @connect 这几行换回一行
@@ -62,6 +63,8 @@
   const VERSION = (typeof GM_info !== "undefined" && GM_info && GM_info.script && GM_info.script.version) || "";
   const RECENT_MAX = 60;       // 最近的请求留多少条（接口）
   const NOISE_MAX = 20;        // 页面预取、静态资源另算，最多留这么多，免得把接口挤掉
+  const RECENT_KEY = "__api_mock_recent__";   // 最近的请求存在 sessionStorage 的这个 key 下，见 saveRecent()
+  const RECENT_BUDGET = 1000000;   // 存下来的响应体一共不超过这么多字符：sessionStorage 和页面共用配额，别把页面自己的挤爆
   const BODY_MAX = 300000;     // 响应体超过这么多字符就不留：面板里改不动，存进 localStorage 也太占地方
   const DEFAULT_BODY = '{"code":500,"message":"Internal Server Error (mock)"}';
   const STATUS_TEXT = {
@@ -91,9 +94,10 @@
 
   migrateLegacy();
   let state = load();          // { paused, rules, ui }
-  const recent = [];           // 最近的请求，供「用它建规则」
+  const recent = [];           // 最近的请求，供「用它建规则」。新的在前
   let ui = null;               // 面板建好后才有
   let menuId = null;           // Tampermonkey 弹出菜单里那一项的 id
+  loadRecent();
 
   // ───────────────────────── 规则 ─────────────────────────
 
@@ -241,6 +245,51 @@
       if (++n > max) recent.splice(i--, 1);
     }
   }
+
+  // ── 刷新页面后还留着最近的请求 ──
+  // 存在 sessionStorage：每个标签页一份，刷新还在，关掉标签页就清掉，正好是「这一次测试」的范围。
+  // 好处不只是列表不丢：一刷新规则就先生效的接口，也还能带入刷新前抓到的真实返回。
+  // 只管顶层页面的（面板只显示它的）；离开页面时才写，平时不碰存储。
+
+  function loadRecent() {
+    if (W.top !== W.self) return;
+    try {
+      const list = JSON.parse(W.sessionStorage.getItem(RECENT_KEY) || "[]");
+      if (!Array.isArray(list)) return;
+      list.slice(0, RECENT_MAX + NOISE_MAX).forEach(function (q) {
+        if (!q || typeof q.method !== "string" || typeof q.url !== "string") return;
+        recent.push({
+          method: q.method, url: q.url, path: typeof q.path === "string" ? q.path : shortUrl(q.url),
+          status: typeof q.status === "number" || typeof q.status === "string" ? q.status : "",
+          mocked: !!q.mocked, body: typeof q.body === "string" ? q.body : null,
+          realStatus: typeof q.realStatus === "number" ? q.realStatus : null,
+          noise: !!q.noise, count: parseInt(q.count, 10) || 1,
+          old: true,               // 刷新之前的；同一接口再请求一次，这条就被新的换掉
+        });
+      });
+    } catch (e) { /* 读不出来就当没有 */ }
+  }
+
+  // 响应体从最新的开始留，加起来超过 RECENT_BUDGET 的那些只留接口不留内容
+  function saveRecent() {
+    if (W.top !== W.self) return;
+    let budget = RECENT_BUDGET;
+    const slim = recent.map(function (q) {
+      const keep = q.body != null && q.body.length <= budget;
+      if (keep) budget -= q.body.length;
+      return { method: q.method, url: q.url, path: q.path, status: q.status, mocked: q.mocked,
+        body: keep ? q.body : null, realStatus: q.realStatus, noise: q.noise, count: q.count };
+    });
+    try {
+      W.sessionStorage.setItem(RECENT_KEY, JSON.stringify(slim));
+    } catch (e) {
+      // 页面自己已经把配额用得差不多了：退一步，只留接口列表
+      slim.forEach(function (q) { q.body = null; });
+      try { W.sessionStorage.setItem(RECENT_KEY, JSON.stringify(slim)); } catch (e2) { /* 还放不下就不留了 */ }
+    }
+  }
+
+  W.addEventListener("pagehide", saveRecent);
 
   function keepBody(entry, text) {
     if (entry.noise) return;       // 预取和静态资源的内容不留，占内存又用不上
@@ -581,6 +630,8 @@
     ".req:hover .act,.req .act:focus-visible,.req .act.has{opacity:1}",
     ".req .act.has{color:#067647}",
     "@media (hover:none){.req .act{opacity:1}}",
+    ".sep{display:flex;align-items:center;gap:8px;margin:8px 0 2px;font-size:11px;color:#98a2b3}",
+    ".sep::before,.sep::after{content:'';flex:1;border-top:1px solid #eaecf0}",
     ".empty{color:#98a2b3}",
   ].join("\n");
 
@@ -665,6 +716,7 @@
       h("div", null, "· 在「最近请求」里点一个接口，会带着它的真实返回建一条规则，在上面改状态码或响应体。"),
       h("div", null, "· 只对页面里 fetch / XHR 发的请求生效；页面跳转、文件下载、WebSocket 管不到。"),
       h("div", null, "· 规则存在当前站点，刷新后仍在，测完记得暂停或删掉。状态码填 0 = 网络错误。"),
+      h("div", null, "· 最近请求在刷新页面后还在，关掉标签页才清空；也可以点「清空」。"),
       h("div", null, "· 面板的侧边可以拖宽，双击侧边恢复默认宽度。"),
     ]);
     const helpBtn = h("button", { className: "q", title: "使用说明", onclick: function () {
@@ -707,8 +759,8 @@
           h("input", { type: "checkbox", onchange: function (e) { showNoise = e.target.checked; renderRecent(); } }),
           "含页面预取和静态资源",
         ]),
-        h("button", { className: "link", title: "清空下面的请求列表，不影响规则",
-          onclick: function () { recent.length = 0; renderRecent(); } }, "清空"),
+        h("button", { className: "link", title: "清空下面的请求列表（包括刷新前留下的），不影响规则",
+          onclick: function () { recent.length = 0; saveRecent(); renderRecent(); } }, "清空"),
       ]),
       h("div", { className: "list" }, recentBox),
     ]);
@@ -995,9 +1047,10 @@
     function pickRequest(q) {
       const has = ruleFor(q);
       if (has) { focusRule(has); return; }
-      // 没见过真实返回（比如一刷新规则就先生效了）时两项都是空，normRule 会落回默认的 500 和默认内容
+      // 手上没有它的响应体（没见过真实返回、不是文本、太大没留、刷新后超出预算没存）时，状态码也不带：
+      // 两项一起落回 normRule 默认的 500 和默认报错内容，免得出现「200 + 报错内容」这种对不上的组合
       const body = q.body != null ? pretty(q.body) : undefined;
-      addRule({ method: q.method, match: q.path, status: q.realStatus, body: body,
+      addRule({ method: q.method, match: q.path, status: body != null ? q.realStatus : undefined, body: body,
         orig: body != null ? { status: q.realStatus != null ? q.realStatus : 200, body: body } : null });
     }
 
@@ -1227,7 +1280,17 @@
       });
       const folded = showNoise ? 0 : recent.filter(function (q) { return q.noise; }).length;
       const more = folded ? [h("div", { className: "more" }, "另有 " + folded + " 条页面预取 / 静态资源没显示")] : [];
-      recentBox.replaceChildren.apply(recentBox, list.length ? list.map(requestRow).concat(more)
+      const rows = [];
+      let marked = false;
+      list.forEach(function (q) {
+        if (q.old && !marked) {
+          marked = true;
+          rows.push(h("div", { className: "sep", title: "刷新后还没再请求过的接口。照样可以点它建规则，带入的是刷新前抓到的返回" },
+            "刷新页面之前的请求"));
+        }
+        rows.push(requestRow(q));
+      });
+      recentBox.replaceChildren.apply(recentBox, list.length ? rows.concat(more)
         : [h("div", { className: "empty" }, recent.length ? "没有符合的请求。" : "还没有抓到请求，在页面上操作一下。")].concat(more));
     }
 
