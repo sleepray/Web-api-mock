@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         接口报错模拟
 // @namespace    https://github.com/sleepray/Web-api-mock
-// @version      1.12.0
+// @version      1.13.0
 // @description  按规则把指定接口的返回改成 500、超时、空数据等，用来测前端的异常处理。只在浏览器这一侧生效。
 // @match        *://*/*
 // @run-at       document-start
@@ -608,6 +608,13 @@
     ".chips span{color:#667085;margin-right:2px}",
     ".chip{height:20px;padding:0 8px;border-radius:10px;font-size:11px;color:#344054}",
     ".chip.undo{margin-left:auto;color:#1570ef;border-color:#b2ccff}",
+    // 「格式化」浮在编辑框右上角，不占一行；往左让开滚动条
+    ".bodywrap{position:relative}",
+    ".bodywrap textarea{display:block}",
+    ".fmt{position:absolute;top:5px;right:20px;height:20px;padding:0 8px;border-radius:10px;font-size:11px;",
+    "  color:#1570ef;border-color:#b2ccff;background:#fff;opacity:.8}",
+    ".fmt:hover{opacity:1;background:#f5f8ff}",
+    ".err .link,.tip .link{margin-left:6px;font-weight:600}",
     ".more{padding:4px 0;color:#98a2b3}",
     // 一行一个接口，点一下展开看返回。「建规则」平时不显示，鼠标移上来、展开后、或用键盘走到它时才出现；已有规则的一直显示
     ".req{display:flex;align-items:center;gap:8px;margin:0 -6px;padding:4px 6px;border-bottom:1px dashed #eaecf0;border-radius:4px;cursor:pointer}",
@@ -1109,24 +1116,60 @@
       const card = h("div", { className: "rule" + (r.on ? "" : " off") });
       cardEls.set(r.id, card);
       const bodyBox = h("textarea", { value: r.body, placeholder: "返回的响应体", spellcheck: false,
-        oninput: function (e) { r.body = e.target.value; save(); checkBody(); } });
+        onkeydown: assistKey,
+        oninput: function (e) { r.body = e.target.value; fixNote.hidden = true; save(); checkBody(); } });
       const bodyErr = h("div", { className: "err", hidden: true });
+      const fixNote = h("div", { className: "tip", hidden: true });
+      const fixBtn = h("button", { className: "link", title: "补上缺的引号、逗号、括号，去掉多余的逗号，再重新排版。可以撤销",
+        onclick: formatBody }, "自动修复");
       // 少个逗号、多个引号，页面拿到后会解析失败，报出来的错很像前端 bug —— 所以改的时候就提示
       function checkBody() {
         const msg = jsonError(r.body);
         bodyErr.hidden = !msg;
-        bodyErr.textContent = msg ? "响应体不是合法的 JSON，页面拿到后会解析失败：" + msg : "";
+        bodyErr.replaceChildren.apply(bodyErr, msg ? ["响应体不是合法的 JSON，页面拿到后会解析失败：" + msg, fixBtn] : []);
         bodyBox.classList.toggle("bad", !!msg);
       }
       checkBody();
+      // 带入的原返回往往几十上百行，按内容把框撑高一些，封顶 260px，再长就在框里滚动
+      function fitHeight() {
+        bodyBox.style.height = Math.min(260, Math.max(44, r.body.split("\n").length * 17 + 12)) + "px";
+      }
+      function setBody(text) {
+        r.body = text;
+        bodyBox.value = text;
+        save();
+        checkBody();
+        fitHeight();
+      }
+      // 「格式化」和「自动修复」是同一个动作：合法的重新排版；写坏了的先试着修好再排版。
+      // 修复是猜的，所以改完留一条说明修了什么，带「撤销」
+      function formatBody() {
+        const t = r.body.trim();
+        if (t.charAt(0) !== "{" && t.charAt(0) !== "[") { toast("响应体不是 JSON，没有可以排版的"); return; }
+        let next, fixed = "";
+        try {
+          next = JSON.stringify(JSON.parse(t), null, 2);
+        } catch (e) {
+          const res = repairJson(t);
+          if (!res) { toast("这段 JSON 自动修不了，得照着提示手动改"); return; }
+          next = res.text;
+          fixed = res.summary;
+        }
+        if (next === r.body) { toast("已经是排好版的了"); return; }
+        const prev = r.body;
+        setBody(next);
+        fixNote.replaceChildren(
+          fixed ? "已自动修复：" + fixed + "。请确认内容是你要的。" : "已重新排版。",
+          h("button", { className: "link", onclick: function () { setBody(prev); fixNote.hidden = true; } }, "撤销"));
+        fixNote.hidden = false;
+      }
       const presets = h("div", { className: "chips" }, [h("span", null, "预设")].concat(PRESETS.map(function (p) {
         return h("button", { className: "chip", title: p.tip, onclick: function () { applyPreset(r, p); } }, p.label);
       })).concat([
         h("button", { className: "chip undo", title: "回到刚建好规则时的样子：状态码和响应体恢复成原返回，模式回到「拦截」，延迟清零",
           onclick: function () { resetRule(r); } }, "↺ 复原"),
       ]));
-      // 带入的原返回往往几十上百行，按内容把框撑高一些，封顶 260px，再长就在框里滚动
-      bodyBox.style.height = Math.min(260, Math.max(44, r.body.split("\n").length * 17 + 12)) + "px";
+      fitHeight();
 
       function num(key, value, title) {
         return h("input", { type: "number", min: 0, value: value, title: title, onchange: function (e) {
@@ -1165,8 +1208,13 @@
           h("button", { className: "link", title: "命中次数清零", onclick: function () { r.hits = 0; save(); api.hits(r); } }, "清零"),
         ]),
         presets,
-        bodyBox,
+        h("div", { className: "bodywrap" }, [
+          bodyBox,
+          h("button", { className: "fmt", title: "把 JSON 重新排版；写坏了的（少引号、少逗号、括号没配上）会先试着修好",
+            onclick: formatBody }, "格式化"),
+        ]),
         bodyErr,
+        fixNote,
         warn
       );
       return card;
@@ -1177,6 +1225,262 @@
       const t = (text || "").trim();
       if (t.charAt(0) !== "{" && t.charAt(0) !== "[") return "";
       try { JSON.parse(t); return ""; } catch (e) { return String(e && e.message || e); }
+    }
+
+    // ── 自动修复 JSON ──
+    // 手改响应体时最常见的失误：删多了引号、漏了逗号、多了个尾逗号、括号没配上、键没加引号。
+    // 用一个不挑剔的解析器把它读成值，再重新输出成合法的 JSON；读的时候让过的每一步都记下来，好告诉人修了什么。
+    // 全是猜的，所以只在人点了才做，而且能撤销。修不了返回 null，修好返回 { text, summary }。
+    function repairJson(src) {
+      const n = src.length, fixes = {};
+      let i = 0;
+      function note(kind) { fixes[kind] = (fixes[kind] || 0) + 1; }
+      function quoteKind(c) { return c === '"' ? 1 : c === "“" || c === "”" ? 2 : c === "'" ? 3 : c === "‘" || c === "’" ? 4 : 0; }
+
+      // 跳过空白和注释
+      function skip() {
+        for (;;) {
+          while (i < n && /\s/.test(src[i])) i++;
+          if (src[i] === "/" && src[i + 1] === "/") { while (i < n && src[i] !== "\n") i++; note("other"); continue; }
+          if (src[i] === "/" && src[i + 1] === "*") { const e = src.indexOf("*/", i + 2); i = e < 0 ? n : e + 2; note("other"); continue; }
+          return;
+        }
+      }
+
+      function string() {
+        const kind = quoteKind(src[i]);
+        if (src[i] !== '"') note("quote");         // 单引号、中文引号：换成双引号
+        i++;
+        let out = "";
+        for (;;) {
+          const c = src[i];
+          // 到行尾、到结尾都没等到另一半引号：多半是把它删了，就在这儿收住。
+          // 行尾的逗号（结尾处还有括号）不算内容，退回去留给外层当分隔符
+          if (i >= n || c === "\n" || c === "\r") {
+            let j = i - 1;
+            while (j >= 0 && (i >= n ? /[\s}\],]/.test(src[j]) : /[ \t,]/.test(src[j]))) j--;
+            out = out.slice(0, Math.max(0, out.length - (i - 1 - j)));
+            i = j + 1;
+            note("quote");
+            return out;
+          }
+          // 直引号开头的只认同样的直引号收尾（内容里可能有中文引号）；中文引号开头的，中文引号和对应的直引号都算收尾
+          const ck = quoteKind(c);
+          if (ck && (ck === kind || (ck === kind - 1 && (kind === 2 || kind === 4)))) { i++; return out; }
+          if (c === "\\") {
+            const d = src[i + 1], hex = src.substr(i + 2, 4);
+            const plain = { '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t", "'": "'" };
+            if (d === "u" && /^[0-9a-fA-F]{4}$/.test(hex)) { out += String.fromCharCode(parseInt(hex, 16)); i += 6; continue; }
+            if (d !== undefined && Object.prototype.hasOwnProperty.call(plain, d)) { out += plain[d]; i += 2; continue; }
+            out += d === undefined ? "" : d;       // 不认识的转义：去掉反斜杠
+            i += 2;
+            note("other");
+            continue;
+          }
+          out += c;
+          i++;
+        }
+      }
+
+      // 没加引号的值：true / false / null / 数字，或者一段该加引号的字
+      function bareValue() {
+        // 数字、true / false / null 后面跟着空格：只取这一个，后面的算下一项（[1 2 3] 是三个数，不是一个字符串）
+        const lit = /^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)(?=[ \t])/.exec(src.substr(i, 64));
+        if (lit) {
+          i += lit[0].length;
+          return lit[0] === "true" ? true : lit[0] === "false" ? false : lit[0] === "null" ? null : Number(lit[0]);
+        }
+        const start = i;
+        while (i < n && !/[,\]}\n\r"]/.test(src[i])) i++;
+        const w = src.slice(start, i).trim();
+        if (!w) throw new Error("empty value");
+        // 后面紧跟一个引号、引号后面就是分隔符：这是只丢了开头引号的字符串
+        if (src[i] === '"' && /^"[ \t]*([,}\]\n\r]|$)/.test(src.substr(i, 40))) { i++; note("quote"); return w; }
+        if (w === "true") return true;
+        if (w === "false") return false;
+        if (w === "null") return null;
+        if (/^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$/.test(w)) return Number(w);
+        const low = w.toLowerCase();
+        if (low === "true" || low === "false") { note("other"); return low === "true"; }
+        if (low === "null" || low === "none" || low === "nil" || low === "undefined") { note("other"); return null; }
+        if (/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(w)) { note("other"); return Number(w); }
+        note("quote");
+        return w;
+      }
+
+      function bareKey() {
+        const start = i;
+        while (i < n && !/[:=\n\r,}\]]/.test(src[i])) i++;
+        return src.slice(start, i).trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, "");
+      }
+
+      function any(depth) {
+        if (depth > 200) throw new Error("too deep");
+        skip();
+        const c = src[i];
+        if (c === "{") return object(depth);
+        if (c === "[") return array(depth);
+        if (quoteKind(c)) return string();
+        return bareValue();
+      }
+
+      function object(depth) {
+        const o = {};
+        i++;
+        for (;;) {
+          const at = i;
+          skip();
+          if (i >= n) { note("bracket"); return o; }
+          const c = src[i];
+          if (c === "}") { i++; return o; }
+          if (c === "]") { note("bracket"); return o; }          // 括号没配上：这个对象到此为止，那个 ] 留给外层
+          if (c === ",") { i++; note("extra"); continue; }
+          let key;
+          if (quoteKind(c)) {
+            key = string();
+          } else {
+            key = bareKey();
+            if (!key) { i++; note("other"); continue; }          // 孤零零的冒号之类：跳过去
+            note("quote");
+          }
+          skip();
+          if (src[i] === ":") i++;
+          else if (src[i] === "=") { i += src[i + 1] === ">" ? 2 : 1; note("colon"); }
+          else note("colon");
+          skip();
+          let v;
+          if (i >= n || src[i] === "," || src[i] === "}" || src[i] === "]") { v = null; note("other"); }   // 冒号后面什么都没有：给个 null
+          else v = any(depth + 1);
+          Object.defineProperty(o, key, { value: v, enumerable: true, writable: true, configurable: true });
+          skip();
+          if (src[i] === ",") {
+            i++;
+            skip();
+            if (src[i] === "}" || i >= n) note("extra");          // 最后一项后面多了个逗号
+          } else if (i < n && src[i] !== "}" && src[i] !== "]") {
+            note("comma");                                        // 两项之间漏了逗号
+          }
+          if (i === at) i++;                                      // 保险：无论如何都要往前走
+        }
+      }
+
+      function array(depth) {
+        const a = [];
+        i++;
+        for (;;) {
+          const at = i;
+          skip();
+          if (i >= n) { note("bracket"); return a; }
+          const c = src[i];
+          if (c === "]") { i++; return a; }
+          if (c === "}") { note("bracket"); return a; }
+          if (c === ",") { i++; note("extra"); continue; }
+          if (c === ":") { i++; note("other"); continue; }
+          a.push(any(depth + 1));
+          skip();
+          if (src[i] === ",") {
+            i++;
+            skip();
+            if (src[i] === "]" || i >= n) note("extra");
+          } else if (i < n && src[i] !== "]" && src[i] !== "}") {
+            note("comma");
+          }
+          if (i === at) i++;
+        }
+      }
+
+      let value;
+      try {
+        skip();
+        if (src[i] !== "{" && src[i] !== "[") return null;
+        value = any(0);
+        skip();
+        // 后面只剩多出来的括号、逗号、分号可以不管；还有别的内容就不猜了
+        while (i < n && /[\]}\s,;]/.test(src[i])) { if (!/\s/.test(src[i])) note("other"); i++; }
+        if (i < n) return null;
+      } catch (e) {
+        return null;
+      }
+      const names = [["quote", "引号"], ["comma", "补逗号"], ["extra", "去掉多余的逗号"], ["bracket", "补括号"], ["colon", "补冒号"], ["other", "其它"]];
+      return {
+        text: JSON.stringify(value, null, 2),
+        summary: names.filter(function (p) { return fixes[p[0]]; }).map(function (p) { return p[1] + " " + fixes[p[0]] + " 处"; }).join("、"),
+      };
+    }
+
+    // ── 响应体编辑框的输入辅助：自动补另一半、回车自动缩进 ──
+    // 走 execCommand 是为了留在浏览器的撤销记录里（Ctrl+Z 能退回去）；不支持时退回直接改值
+    function typeText(ta, text, caretBack) {
+      let done = false;
+      try { done = document.execCommand(text ? "insertText" : "delete", false, text); } catch (e) { /* 走下面 */ }
+      if (!done) {
+        ta.setRangeText(text, ta.selectionStart, ta.selectionEnd, "end");
+        ta.dispatchEvent(new Event("input"));
+      }
+      if (caretBack) ta.setSelectionRange(ta.selectionStart - caretBack, ta.selectionStart - caretBack);
+    }
+
+    // 括号够不够：开的不比关的多，说明光标后面那个闭括号就是要找的，不用再打一个
+    function balanced(text, close) {
+      const open = close === "}" ? "{" : "[";
+      let depth = 0, inStr = false;
+      for (let j = 0; j < text.length; j++) {
+        const c = text[j];
+        if (inStr) { if (c === "\\") j++; else if (c === '"' || c === "\n") inStr = false; }
+        else if (c === '"') inStr = true;
+        else if (c === open) depth++;
+        else if (c === close) depth--;
+      }
+      return depth <= 0;
+    }
+
+    function assistKey(e) {
+      const ta = e.target, v = ta.value, s = ta.selectionStart, t = ta.selectionEnd, k = e.key;
+      if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (v.trim() && !/^\s*[[{]/.test(v)) return;                 // 已经写了别的东西、又不是 JSON：不插手
+      const prev = v.charAt(s - 1), next = v.charAt(t);
+      const line = v.slice(v.lastIndexOf("\n", s - 1) + 1, s);    // 这一行光标前面的部分
+      const inStr = (line.replace(/\\./g, "").match(/"/g) || []).length % 2 === 1;
+      const roomy = next === "" || /[\s,\]}:]/.test(next);         // 光标后面空着，才适合自动补另一半
+      if (k === "Tab" && !e.shiftKey) { e.preventDefault(); typeText(ta, "  "); return; }
+      if (k === "Enter" && !e.shiftKey) {
+        const indent = /^[ \t]*/.exec(line)[0];
+        const opened = /[[{][ \t]*$/.test(line);
+        const between = opened && s === t && (next === "}" || next === "]");   // 光标夹在一对括号中间：把闭括号顶到下一行
+        e.preventDefault();
+        typeText(ta, "\n" + indent + (opened ? "  " : "") + (between ? "\n" + indent : ""), between ? indent.length + 1 : 0);
+        return;
+      }
+      if (k === "Backspace") {
+        const pair = prev + next;
+        if (s === t && (pair === '""' || pair === "{}" || pair === "[]")) {   // 删掉空的一对
+          e.preventDefault();
+          ta.setSelectionRange(s - 1, s + 1);
+          typeText(ta, "");
+        }
+        return;
+      }
+      if (k === '"') {
+        if (prev === "\\") return;
+        if (s !== t) { e.preventDefault(); typeText(ta, '"' + v.slice(s, t) + '"'); return; }
+        if (inStr) {
+          if (next === '"') { e.preventDefault(); ta.setSelectionRange(s + 1, s + 1); }   // 已经有收尾的引号了，跳过去
+          return;                                                                          // 否则就是来补收尾引号的，照常输入
+        }
+        if (roomy) { e.preventDefault(); typeText(ta, '""', 1); }
+        return;
+      }
+      if (k === "{" || k === "[") {
+        const close = k === "{" ? "}" : "]";
+        if (inStr) return;
+        if (s !== t) { e.preventDefault(); typeText(ta, k + v.slice(s, t) + close); return; }
+        if (roomy) { e.preventDefault(); typeText(ta, k + close, 1); }
+        return;
+      }
+      if ((k === "}" || k === "]") && s === t && next === k && !inStr && balanced(v, k)) {
+        e.preventDefault();
+        ta.setSelectionRange(s + 1, s + 1);
+      }
     }
 
     // 报错时的响应体：{code, message}。原来的响应体里 code 是字符串（比如 "0"）就也给字符串，前端按老样子读
