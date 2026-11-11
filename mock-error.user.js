@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         接口报错模拟
 // @namespace    https://github.com/sleepray/Web-api-mock
-// @version      1.9.0
+// @version      1.10.0
 // @description  按规则把指定接口的返回改成 500、超时、空数据等，用来测前端的异常处理。只在浏览器这一侧生效。
 // @match        *://*/*
 // @run-at       document-start
@@ -19,7 +19,7 @@
 
 /*
  * 安装：浏览器装 Tampermonkey，打开 https://raw.githubusercontent.com/sleepray/Web-api-mock/main/mock-error.user.js
- * 更新：点面板右上角的「检查更新」（有新版时它会变成「更新到 x.y.z」），在打开的 Tampermonkey 页面里点「更新」，
+ * 更新：点面板右上角「⋯」里的「检查更新」（有新版时标题栏会出现「更新到 x.y.z」），在打开的 Tampermonkey 页面里点「更新」，
  *       再刷新页面。脚本没法自己替换自己，所以最后那一下得人点。Tampermonkey 每天也会自己查一次。
  * 发布：改完把 @version 调大，推到仓库的 main 分支。
  *
@@ -71,6 +71,9 @@
   };
   const DOCK_SIDES = ["left", "right", "top", "bottom"];
   const DOCK_SNAP = 12;        // 松手时按钮离窗口边缘不到这么多像素，就缩进那条边
+  const PANEL_W = 580;         // 面板默认宽度；拖面板的侧边可以改，双击侧边恢复
+  const PANEL_MIN = 420;
+  const PANEL_MAX = 1400;
   const METHODS = ["ANY", "GET", "POST", "PUT", "PATCH", "DELETE"];
   const MODES = [["block", "拦截：不发到服务器"], ["rewrite", "放行：只改返回"], ["hang", "挂起：一直不返回"]];
   // 规则卡上的一排快捷按钮。status ≥ 400 的会把响应体换成对应的报错内容
@@ -119,15 +122,16 @@
     return v === 0 || (v >= 200 && v <= 599);
   }
 
-  // 按钮的位置和显隐。位置按「离右边、离下边多远」存，窗口变大变小都贴着同一个角
+  // 按钮的位置和显隐、面板的宽度。位置按「离右边、离下边多远」存，窗口变大变小都贴着同一个角
   function normUi(u) {
     u = u || {};
-    const right = parseFloat(u.right), bottom = parseFloat(u.bottom);
+    const right = parseFloat(u.right), bottom = parseFloat(u.bottom), width = parseFloat(u.width);
     return {
       right: isFinite(right) ? right : 16,
       bottom: isFinite(bottom) ? bottom : 16,
       hidden: !!u.hidden,
       dock: DOCK_SIDES.indexOf(u.dock) >= 0 ? u.dock : null,    // 贴边停靠在哪条边，null = 没停靠
+      width: isFinite(width) ? Math.min(PANEL_MAX, Math.max(PANEL_MIN, width)) : PANEL_W,
     };
   }
 
@@ -196,19 +200,20 @@
 
   // 返回这条记录：响应体要晚一步才读得到，读到了再用 keepBody 挂上去。
   // 同一接口只留最新一条，但把上一条抓到的真实状态码和响应体接过来 ——
-  // 不然接口一被模拟，「建规则」能带入的原返回就没了。
+  // 不然接口一被模拟，「建规则」能带入的原返回就没了。count 是这个接口一共请求了几次。
   function record(method, url, status, mocked) {
     const path = shortUrl(url);
-    let body = null, realStatus = null;
+    let body = null, realStatus = null, count = 1;
     for (let i = recent.length - 1; i >= 0; i--) {
       if (recent[i].method !== method || recent[i].path !== path) continue;
       if (recent[i].body != null) body = recent[i].body;
       if (recent[i].realStatus != null) realStatus = recent[i].realStatus;
+      count = (recent[i].count || 1) + 1;
       recent.splice(i, 1);
     }
     if (!mocked) realStatus = typeof status === "number" ? status : 0;   // 「失败」是网络错误，对应状态码 0
     const entry = { method: method, url: url, path: path, status: status, mocked: !!mocked, body: body,
-      realStatus: realStatus, noise: isNoise(url) };
+      realStatus: realStatus, noise: isNoise(url), count: count };
     recent.unshift(entry);
     trimRecent(true, NOISE_MAX);
     trimRecent(false, RECENT_MAX);
@@ -479,18 +484,49 @@
     "  background:#1d2129;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.3)}",
     ".fab.live{background:#d92d20;opacity:1;font-weight:600}",
     ".fab.paused{background:#b54708;opacity:1}",
-    ".panel{position:fixed;right:16px;bottom:52px;z-index:2147483647;width:580px;max-width:calc(100vw - 32px);max-height:72vh;",
+    // 面板不裁剪溢出：「⋯」菜单和拖宽用的侧边要能伸到面板外面，圆角由 head / 各页自己负责
+    ".panel{position:fixed;right:16px;bottom:52px;z-index:2147483647;width:580px;max-width:calc(100vw - 16px);max-height:72vh;",
     "  display:flex;flex-direction:column;background:#fff;color:#1d2129;border:1px solid #d0d5dd;border-radius:10px;",
-    "  box-shadow:0 12px 32px rgba(0,0,0,.22);overflow:hidden}",
+    "  box-shadow:0 12px 32px rgba(0,0,0,.22)}",
     ".panel[hidden]{display:none}",
-    ".head{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid #eaecf0;background:#f9fafb}",
-    ".head b{font-size:13px;flex:1}",
+    ".head{position:relative;display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid #eaecf0;",
+    "  background:#f9fafb;border-radius:10px 10px 0 0}",
+    ".head b{font-size:13px;flex:1;white-space:nowrap}",
     ".ver{margin-left:6px;font-size:11px;font-weight:400;color:#98a2b3}",
     ".link.hot{color:#b54708;font-weight:600}",
-    ".head label{display:flex;align-items:center;gap:4px;cursor:pointer}",
-    ".body{padding:12px 14px;overflow:auto}",
+    ".link[hidden]{display:none}",
+    ".head label{display:flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap}",
+    ".head label.on{color:#b54708;font-weight:600}",
+    ".dots{border:0;padding:0 6px;font-size:16px;line-height:1;color:#667085;background:none}",
+    ".dots:hover{background:#eaecf0}",
+    ".menu{position:absolute;top:calc(100% - 6px);right:36px;z-index:2;min-width:150px;padding:4px;background:#fff;",
+    "  border:1px solid #d0d5dd;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18)}",
+    ".menu[hidden]{display:none}",
+    ".menu button{display:block;width:100%;height:28px;border:0;border-radius:5px;text-align:left;white-space:nowrap}",
+    ".menu button.hot{color:#b54708;font-weight:600}",
+    ".tabs{display:flex;align-items:center;gap:2px;padding:0 10px;border-bottom:1px solid #eaecf0}",
+    ".tab{height:32px;padding:0 10px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:#667085}",
+    ".tab:hover{background:none;color:#1d2129}",
+    ".tab.on{color:#1570ef;border-bottom-color:#1570ef;font-weight:600}",
+    ".tab i{font-style:normal;font-size:11px;font-weight:400;margin-left:5px;padding:0 6px;border-radius:8px;background:#f2f4f7;color:#667085}",
+    ".tab i.live{background:#fef3f2;color:#d92d20}",
+    ".tab i[hidden]{display:none}",
+    ".q{margin-left:auto;width:20px;height:20px;padding:0;border-radius:50%;color:#98a2b3}",
+    ".q.on{color:#1570ef;border-color:#b2ccff}",
+    ".help{padding:8px 14px;background:#f9fafb;border-bottom:1px solid #eaecf0;color:#475467}",
+    ".help[hidden],.pane[hidden]{display:none}",
+    ".pane{flex:1;min-height:0;display:flex;flex-direction:column}",
+    ".body{flex:1;min-height:0;padding:12px 14px;overflow:auto;border-radius:0 0 10px 10px}",
+    ".tools{display:flex;align-items:center;gap:10px;padding:10px 14px 8px}",
+    ".tools label{display:flex;align-items:center;gap:4px;color:#667085;white-space:nowrap;cursor:pointer}",
+    ".list{flex:1;min-height:0;padding:0 14px 10px;overflow:auto;border-radius:0 0 10px 10px}",
+    // 拖宽用的侧边：面板往哪边长，它就在哪边（见 placePanel）
+    ".grip{position:absolute;top:10px;bottom:10px;right:-5px;width:10px;cursor:ew-resize;touch-action:none}",
+    ".panel.grow-left .grip{right:auto;left:-5px}",
     ".rule{border:1px solid #d0d5dd;border-radius:8px;padding:8px;margin-bottom:8px}",
     ".rule.off{opacity:.5}",
+    ".rule{transition:box-shadow .3s,border-color .3s}",
+    ".rule.flash{border-color:#1570ef;box-shadow:0 0 0 3px rgba(21,112,239,.18)}",
     ".row{display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap}",
     ".row:last-child{margin-bottom:0}",
     ".row span{color:#667085;white-space:nowrap}",
@@ -519,15 +555,28 @@
     ".chip{height:20px;padding:0 8px;border-radius:10px;font-size:11px;color:#344054}",
     ".chip.undo{margin-left:auto;color:#1570ef;border-color:#b2ccff}",
     ".more{padding:4px 0;color:#98a2b3}",
-    ".sec{display:flex;align-items:center;justify-content:space-between;margin:14px 0 6px;color:#667085}",
-    ".sec b{font-weight:600}",
-    ".req{display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px dashed #eaecf0}",
-    ".req code{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,Menlo,monospace;font-size:11px}",
-    ".req .m{width:44px;color:#667085}",
-    ".req .s{width:54px;text-align:right;color:#667085}",
+    // 一行一个接口，整行可点。「建规则」平时不显示，鼠标移上来或用键盘走到它时才出现；已有规则的一直显示
+    ".req{display:flex;align-items:center;gap:8px;margin:0 -6px;padding:4px 6px;border-bottom:1px dashed #eaecf0;border-radius:4px;cursor:pointer}",
+    ".req:hover{background:#f5f8ff}",
+    ".req .m{flex:none;width:46px;font-size:11px;font-weight:600;color:#98a2b3}",
+    ".req .m.post{color:#067647}",
+    ".req .m.put,.req .m.patch{color:#b54708}",
+    ".req .m.delete{color:#b42318}",
+    // 路径太长时从中间省略：前半段可以收缩，最后一段不收缩
+    ".req code{flex:1;min-width:0;display:flex;white-space:nowrap}",
+    ".req code,.req code span{font-family:ui-monospace,Menlo,monospace;font-size:11px}",
+    ".req .hd{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}",
+    ".req .tl{flex:none}",
+    ".req .n{flex:none;font-size:11px;color:#98a2b3}",
+    ".req .tag{flex:none;padding:0 6px;border-radius:8px;font-size:11px;background:#fef3f2;color:#d92d20}",
+    ".req .s{flex:none;min-width:28px;text-align:right;color:#667085;font-variant-numeric:tabular-nums}",
+    ".req .s.c4{color:#b54708}",
     ".req .s.bad{color:#d92d20}",
-    ".empty,.note{color:#98a2b3}",
-    ".note{margin-top:12px}",
+    ".req .act{flex:none;width:52px;text-align:right;opacity:0}",
+    ".req:hover .act,.req .act:focus-visible,.req .act.has{opacity:1}",
+    ".req .act.has{color:#067647}",
+    "@media (hover:none){.req .act{opacity:1}}",
+    ".empty{color:#98a2b3}",
   ].join("\n");
 
   // 用 DOM API 拼界面，不用 innerHTML：不用操心转义，也不怕站点开了 Trusted Types
@@ -585,42 +634,80 @@
     const toastEl = h("div", { className: "toast", hidden: true });
     const rulesBox = h("div");
     const recentBox = h("div");
+    const cardEls = new Map();     // rule.id → 规则卡，「已有规则」跳过去时要找到它
+    let tab = "";                  // 当前页签 rules / recent；空 = 还没打开过面板
     let filterText = "";           // 最近请求的筛选词（小写）
     let showNoise = false;         // 是否显示页面预取和静态资源
+    let rz = null;                 // 正在拖宽面板时的起点
     const pause = h("input", { type: "checkbox", onchange: function (e) { state.paused = e.target.checked; save(); } });
-    const updateBtn = h("button", { className: "link", title: "到 GitHub 上查有没有新版本；有就打开 Tampermonkey 的更新页",
-      onclick: function () { checkUpdate(true); } }, "检查更新");
+    const pauseLabel = h("label", { title: "所有规则临时失效，规则本身保留" }, [pause, "全部暂停"]);
+    // 检查更新平时收在「⋯」里；查到新版本后，标题栏上另外亮一个「更新到 x.y.z」
+    const updateHot = h("button", { className: "link hot", hidden: true, title: "打开 Tampermonkey 的更新页，在那页点「更新」后刷新本页",
+      onclick: function () { checkUpdate(true); } });
+    const updateItem = h("button", { title: "到 GitHub 上查有没有新版本；有就打开 Tampermonkey 的更新页",
+      onclick: function () { menu.hidden = true; checkUpdate(true); } }, "检查更新");
+    const menu = h("div", { className: "menu", hidden: true }, [
+      updateItem,
+      h("button", { title: "把 Mock 按钮藏起来，按 " + HOTKEY + " 或在 Tampermonkey 菜单里再显示。规则照常生效",
+        onclick: function () { menu.hidden = true; setHidden(true); } }, "隐藏 Mock 按钮"),
+    ]);
+    const dots = h("button", { className: "dots", title: "更多：检查更新、隐藏 Mock 按钮",
+      onclick: function () { menu.hidden = !menu.hidden; } }, "⋯");
+    const ruleCount = h("i");
+    const tabRules = h("button", { className: "tab", onclick: function () { showTab("rules"); } }, ["规则", ruleCount]);
+    const tabRecent = h("button", { className: "tab", onclick: function () { showTab("recent"); } }, "最近请求");
+    const help = h("div", { className: "help", hidden: true }, [
+      h("div", null, "· 在「最近请求」里点一个接口，会带着它的真实返回建一条规则，在上面改状态码或响应体。"),
+      h("div", null, "· 只对页面里 fetch / XHR 发的请求生效；页面跳转、文件下载、WebSocket 管不到。"),
+      h("div", null, "· 规则存在当前站点，刷新后仍在，测完记得暂停或删掉。状态码填 0 = 网络错误。"),
+      h("div", null, "· 面板的侧边可以拖宽，双击侧边恢复默认宽度。"),
+    ]);
+    const helpBtn = h("button", { className: "q", title: "使用说明", onclick: function () {
+      help.hidden = !help.hidden;
+      helpBtn.classList.toggle("on", !help.hidden);
+      placePanel();
+    } }, "?");
+    const rulesBody = h("div", { className: "body" }, [
+      rulesBox,
+      h("button", { onclick: function () { addRule({}); } }, "+ 新增规则"),
+    ]);
+    const paneRules = h("div", { className: "pane" }, rulesBody);
+    const paneRecent = h("div", { className: "pane", hidden: true }, [
+      h("div", { className: "tools" }, [
+        h("input", { className: "grow", type: "text", placeholder: "筛选：方法或路径里的一段，如 post、/api/",
+          oninput: function (e) { filterText = e.target.value.trim().toLowerCase(); renderRecent(); } }),
+        h("label", { title: "页面跳转前的预取（Next.js 的 ?_rsc=）、脚本、样式、图片、字体。默认不显示" }, [
+          h("input", { type: "checkbox", onchange: function (e) { showNoise = e.target.checked; renderRecent(); } }),
+          "含页面预取和静态资源",
+        ]),
+        h("button", { className: "link", title: "清空下面的请求列表，不影响规则",
+          onclick: function () { recent.length = 0; renderRecent(); } }, "清空"),
+      ]),
+      h("div", { className: "list" }, recentBox),
+    ]);
+    const grip = h("div", { className: "grip", title: "拖动改面板宽度，双击恢复默认" });
 
     panel.append(
       h("div", { className: "head" }, [
         h("b", null, ["接口报错模拟", VERSION ? h("span", { className: "ver" }, "v" + VERSION) : null]),
-        updateBtn,
-        h("label", { title: "所有规则临时失效，规则本身保留" }, [pause, "全部暂停"]),
-        h("button", { className: "link", title: "把 Mock 按钮藏起来，按 " + HOTKEY + " 再显示。规则照常生效",
-          onclick: function () { setHidden(true); } }, "隐藏按钮"),
+        updateHot,
+        pauseLabel,
+        dots,
         h("button", { className: "x", title: "收起面板", onclick: function () { setPanel(false); } }, "✕"),
+        menu,
       ]),
-      h("div", { className: "body" }, [
-        rulesBox,
-        h("button", { onclick: function () { addRule({}); } }, "+ 新增规则"),
-        h("div", { className: "sec" }, [
-          h("b", null, "最近的请求（点「建规则」带入接口和原返回）"),
-          h("button", { className: "link", title: "清空下面的请求列表，不影响规则",
-            onclick: function () { recent.length = 0; renderRecent(); } }, "清空"),
-        ]),
-        h("div", { className: "row" }, [
-          h("input", { className: "grow", type: "text", placeholder: "筛选：方法或路径里的一段，如 post、/api/",
-            oninput: function (e) { filterText = e.target.value.trim().toLowerCase(); renderRecent(); } }),
-          h("label", { title: "页面跳转前的预取（Next.js 的 ?_rsc=）、脚本、样式、图片、字体。默认不显示" }, [
-            h("input", { type: "checkbox", onchange: function (e) { showNoise = e.target.checked; renderRecent(); } }),
-            "含页面预取和静态资源",
-          ]),
-        ]),
-        recentBox,
-        h("div", { className: "note" },
-          "只对页面里 fetch / XHR 发的请求生效；规则存在当前站点，刷新后仍在。状态码填 0 = 网络错误。"),
-      ])
+      h("div", { className: "tabs" }, [tabRules, tabRecent, helpBtn]),
+      help,
+      paneRules,
+      paneRecent,
+      grip
     );
+    // 点菜单以外的地方就收起菜单。事件从 shadow DOM 里出来后 target 会变成宿主，所以看 composedPath
+    document.addEventListener("pointerdown", function (e) {
+      if (menu.hidden) return;
+      const path = e.composedPath ? e.composedPath() : [];
+      if (path.indexOf(menu) < 0 && path.indexOf(dots) < 0) menu.hidden = true;
+    }, true);
     root.append(fab, panel, toastEl);
 
     // ── 按钮位置：可拖动，面板跟着按钮走 ──
@@ -654,7 +741,11 @@
     function setPanel(open) {
       panel.hidden = !open;
       fab.classList.toggle("peek", open);      // 面板开着时，停靠的按钮别缩回去
-      if (open) { render(); placePanel(); }
+      menu.hidden = true;
+      if (open) {
+        if (!tab) tab = state.rules.length ? "rules" : "recent";   // 第一次打开：有规则先看规则，没有就先看请求
+        render();
+      }
       if (open && !updateChecked) { updateChecked = true; checkUpdate(false); }   // 每次打开页面静默查一次，有新版按钮会变样
     }
 
@@ -699,8 +790,9 @@
             return;
           }
           latest = m[1];
-          updateBtn.textContent = "更新到 " + latest;
-          updateBtn.classList.add("hot");
+          updateHot.textContent = updateItem.textContent = "更新到 " + latest;
+          updateHot.hidden = false;
+          updateItem.classList.add("hot");
           if (byUser) {
             toast("发现新版本 " + latest + "：在新打开的页面里点「更新」，再刷新本页");
             openInstall();
@@ -727,12 +819,39 @@
       panel.style.bottom = up ? (v.h - r.top + 8) + "px" : "auto";
       // 横向统一按 left 定位再夹进窗口：按钮在中间偏右时，面板比「按钮右缘到窗口左边」还宽，
       // 只按右对齐会伸出窗口左边
+      panel.style.width = state.ui.width + "px";           // 超过窗口时由 CSS 的 max-width 夹住
+      panel.classList.toggle("grow-left", alignRight);     // 右对齐时面板往左长，拖宽的侧边放在左边
       const pw = panel.offsetWidth;
       const left = alignRight ? r.right - pw : r.left;
+      const maxH = Math.max(160, Math.min(v.h * 0.72, room));
       panel.style.right = "auto";
       panel.style.left = Math.max(8, Math.min(left, v.w - pw - 8)) + "px";
-      panel.style.maxHeight = Math.max(160, Math.min(v.h * 0.72, room)) + "px";
+      panel.style.maxHeight = maxH + "px";
+      panel.style.minHeight = Math.min(300, maxH) + "px";  // 两个页签内容一多一少，别让面板切换时忽高忽低
     }
+
+    // ── 拖侧边改面板宽度 ──
+    grip.addEventListener("pointerdown", function (e) {
+      if (e.button !== 0) return;
+      rz = { x: e.clientX, w: panel.offsetWidth, left: panel.classList.contains("grow-left") };
+      try { grip.setPointerCapture(e.pointerId); } catch (err) { /* 合成事件没有可捕获的指针 */ }
+      e.preventDefault();          // 别拖出文字选区
+    });
+    grip.addEventListener("pointermove", function (e) {
+      if (!rz) return;
+      const dx = e.clientX - rz.x;
+      const w = rz.w + (rz.left ? -dx : dx);
+      state.ui.width = Math.max(PANEL_MIN, Math.min(w, PANEL_MAX, viewport().w - 16));
+      placePanel();
+    });
+    function endResize() {
+      if (!rz) return;
+      rz = null;
+      save();
+    }
+    grip.addEventListener("pointerup", endResize);
+    grip.addEventListener("pointercancel", endResize);
+    grip.addEventListener("dblclick", function () { state.ui.width = PANEL_W; save(); placePanel(); });
 
     fab.addEventListener("pointerdown", function (e) {
       if (e.button !== 0) return;
@@ -807,9 +926,71 @@
     }, true);
 
     function addRule(seed) {
-      state.rules.push(normRule(seed));
+      const r = normRule(seed);
+      state.rules.push(r);
       save();
-      renderRules();
+      focusRule(r);
+    }
+
+    function showTab(name) {
+      tab = name;
+      tabRules.classList.toggle("on", name === "rules");
+      tabRecent.classList.toggle("on", name === "recent");
+      paneRules.hidden = name !== "rules";
+      paneRecent.hidden = name !== "recent";
+      if (name === "rules") renderRules(); else renderRecent();
+      if (!panel.hidden) placePanel();
+    }
+
+    // 切到规则页签，滚到这条规则并闪一下边框，告诉人「在这儿」
+    function focusRule(r) {
+      showTab("rules");
+      const card = cardEls.get(r.id);
+      if (!card) return;
+      // 自己算滚动量，不用 scrollIntoView：它会连页面一起滚
+      const box = rulesBody.getBoundingClientRect(), c = card.getBoundingClientRect();
+      if (c.top < box.top) rulesBody.scrollTop -= box.top - c.top + 8;
+      else if (c.bottom > box.bottom) rulesBody.scrollTop += Math.min(c.top - box.top - 8, c.bottom - box.bottom + 8);
+      card.classList.add("flash");
+      setTimeout(function () { card.classList.remove("flash"); }, 1200);
+    }
+
+    // 这个请求已经有规则管着了吗？不看规则是否启用、是否用完 —— 关着的规则也算「已有」，免得重复建
+    function ruleFor(q) {
+      for (let i = 0; i < state.rules.length; i++) {
+        const r = state.rules[i];
+        if ((r.method === "ANY" || r.method === q.method) && urlMatch(r.match, q.url)) return r;
+      }
+      return null;
+    }
+
+    // 点最近请求里的一行：已有规则就跳过去，没有就带着原返回建一条
+    function pickRequest(q) {
+      const has = ruleFor(q);
+      if (has) { focusRule(has); return; }
+      // 没见过真实返回（比如一刷新规则就先生效了）时两项都是空，normRule 会落回默认的 500 和默认内容
+      const body = q.body != null ? pretty(q.body) : undefined;
+      addRule({ method: q.method, match: q.path, status: q.realStatus, body: body,
+        orig: body != null ? { status: q.realStatus != null ? q.realStatus : 200, body: body } : null });
+    }
+
+    // 路径里的长 ID（十几二十位的数字、UUID）占地方又读不出什么，显示时缩成「前 4 位…后 4 位」。
+    // 只影响显示：建规则带入的、鼠标停上去看到的都是完整路径
+    function briefPath(path) {
+      return path.split("/").map(function (seg) {
+        const longId = /^\d{12,}$/.test(seg)
+          || (seg.length >= 16 && /^[0-9a-f-]+$/i.test(seg) && (seg.match(/\d/g) || []).length >= 4);
+        return longId ? seg.slice(0, 4) + "…" + seg.slice(-4) : seg;
+      }).join("/");
+    }
+
+    // 拆成 [前半段, 最后一段]：放不下时省略号出在前半段的末尾，也就是整条路径的中间，结尾始终看得见
+    function splitPath(p) {
+      if (p.length > 1 && p.charAt(p.length - 1) === "/") p = p.slice(0, -1);
+      const i = p.lastIndexOf("/");
+      if (i <= 0) return [p, ""];
+      if (p.length - i > 32) return [p.slice(0, -32), p.slice(-32)];   // 最后一段自己就很长：只保住末尾 32 个字符
+      return [p.slice(0, i), p.slice(i)];
     }
 
     function ruleCard(r) {
@@ -826,6 +1007,7 @@
       }
       showModeNote();
       const card = h("div", { className: "rule" + (r.on ? "" : " off") });
+      cardEls.set(r.id, card);
       const bodyBox = h("textarea", { value: r.body, placeholder: "返回的响应体", spellcheck: false,
         oninput: function (e) { r.body = e.target.value; save(); checkBody(); } });
       const bodyErr = h("div", { className: "err", hidden: true });
@@ -979,41 +1161,49 @@
 
     function renderRules() {
       hitEls.clear();
+      cardEls.clear();
       rulesBox.replaceChildren.apply(rulesBox, state.rules.length
         ? state.rules.map(ruleCard)
-        : [h("div", { className: "empty", style: "margin-bottom:8px" }, "还没有规则。")]);
+        : [h("div", { className: "empty", style: "margin-bottom:8px" }, [
+          "还没有规则。到「",
+          h("button", { className: "link", onclick: function () { showTab("recent"); } }, "最近请求"),
+          "」里点一个接口，或者手动新增。",
+        ])]);
+    }
+
+    function requestRow(q) {
+      const st = q.status;
+      const tone = typeof st !== "number" || st >= 500 ? " bad" : st >= 400 ? " c4" : "";
+      const parts = splitPath(briefPath(q.path));
+      const has = ruleFor(q);
+      return h("div", { className: "req", onclick: function () { pickRequest(q); } }, [
+        h("span", { className: "m " + String(q.method).toLowerCase() }, q.method),
+        h("code", { title: q.path }, [h("span", { className: "hd" }, parts[0]), h("span", { className: "tl" }, parts[1])]),
+        q.count > 1 ? h("span", { className: "n", title: "这个接口一共请求了 " + q.count + " 次" }, "×" + q.count) : null,
+        q.mocked ? h("span", { className: "tag", title: "这次的返回是规则给的，不是服务器的" }, "模拟") : null,
+        h("span", { className: "s" + tone }, String(st)),
+        // 点击由整行接住，这个按钮只是给键盘留个落点
+        h("button", { className: "link act" + (has ? " has" : ""),
+          title: has ? "这个接口已经有规则了，点击跳到那条规则" : "带入这个接口，以及它最近一次真实返回的状态码和响应体" },
+          has ? "已有规则" : "建规则"),
+      ]);
     }
 
     function renderRecent() {
-      if (panel.hidden) return;
+      if (panel.hidden || tab !== "recent") return;
       const list = recent.filter(function (q) {
         if (q.noise && !showNoise) return false;
         return !filterText || (q.method + " " + q.path).toLowerCase().indexOf(filterText) >= 0;
       });
       const folded = showNoise ? 0 : recent.filter(function (q) { return q.noise; }).length;
       const more = folded ? [h("div", { className: "more" }, "另有 " + folded + " 条页面预取 / 静态资源没显示")] : [];
-      recentBox.replaceChildren.apply(recentBox, list.length ? list.map(function (q) {
-        const bad = q.mocked || q.status === "失败" || q.status >= 400;
-        return h("div", { className: "req" }, [
-          h("span", { className: "m" }, q.method),
-          h("code", { title: q.path }, q.path),
-          h("span", { className: "s" + (bad ? " bad" : "") }, q.status + (q.mocked ? " 模拟" : "")),
-          h("button", { className: "link", title: "带入这个接口，以及它最近一次真实返回的状态码和响应体",
-            onclick: function () {
-              // 没见过真实返回（比如一刷新规则就先生效了）时两项都是空，normRule 会落回默认的 500 和默认内容
-              const body = q.body != null ? pretty(q.body) : undefined;
-              addRule({ method: q.method, match: q.path, status: q.realStatus, body: body,
-                orig: body != null ? { status: q.realStatus != null ? q.realStatus : 200, body: body } : null });
-            } }, "建规则"),
-        ]);
-      }).concat(more) : [h("div", { className: "empty" },
-        recent.length ? "没有符合的请求。" : "还没有抓到请求，在页面上操作一下。")].concat(more));
+      recentBox.replaceChildren.apply(recentBox, list.length ? list.map(requestRow).concat(more)
+        : [h("div", { className: "empty" }, recent.length ? "没有符合的请求。" : "还没有抓到请求，在页面上操作一下。")].concat(more));
     }
 
     function render() {
       pause.checked = state.paused;
-      renderRules();
-      renderRecent();
+      showTab(tab || "rules");
     }
 
     const api = {
@@ -1022,6 +1212,10 @@
         fab.textContent = state.paused ? "Mock 已暂停" : n ? "Mock · " + n + " 条生效" : "Mock";
         fab.classList.toggle("live", n > 0);
         fab.classList.toggle("paused", state.paused);
+        pauseLabel.classList.toggle("on", state.paused);
+        ruleCount.textContent = String(state.rules.length);
+        ruleCount.hidden = !state.rules.length;
+        ruleCount.classList.toggle("live", n > 0);
       },
       hits: function (r) {
         const el = hitEls.get(r.id);
