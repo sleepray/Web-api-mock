@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         接口报错模拟
 // @namespace    https://github.com/sleepray/Web-api-mock
-// @version      1.11.0
+// @version      1.12.0
 // @description  按规则把指定接口的返回改成 500、超时、空数据等，用来测前端的异常处理。只在浏览器这一侧生效。
 // @match        *://*/*
 // @run-at       document-start
@@ -33,6 +33,7 @@
  *
  * 状态码填 0 表示网络错误（断网 / 连接被重置），一律按拦截处理。
  *
+ * 在「最近请求」里点一行，先展开看它的完整地址和响应体，确认是要找的接口再点「建规则」。
  * 「建规则」会把这个接口最近一次真实返回的状态码和响应体带进来，在它上面改。
  * 所以刚建好的规则返回的和原来一样，要报错得自己把状态码改成 500。
  *
@@ -294,6 +295,7 @@
   function keepBody(entry, text) {
     if (entry.noise) return;       // 预取和静态资源的内容不留，占内存又用不上
     if (typeof text === "string" && text.length <= BODY_MAX) entry.body = text;
+    if (ui) ui.body(entry);        // 响应体比记录晚到一步：这条正展开着的话，详情要跟着换成新的
   }
 
   // 只读文本类的返回：事件流（SSE）永远读不完，文件下载留着也没法改。
@@ -607,7 +609,7 @@
     ".chip{height:20px;padding:0 8px;border-radius:10px;font-size:11px;color:#344054}",
     ".chip.undo{margin-left:auto;color:#1570ef;border-color:#b2ccff}",
     ".more{padding:4px 0;color:#98a2b3}",
-    // 一行一个接口，整行可点。「建规则」平时不显示，鼠标移上来或用键盘走到它时才出现；已有规则的一直显示
+    // 一行一个接口，点一下展开看返回。「建规则」平时不显示，鼠标移上来、展开后、或用键盘走到它时才出现；已有规则的一直显示
     ".req{display:flex;align-items:center;gap:8px;margin:0 -6px;padding:4px 6px;border-bottom:1px dashed #eaecf0;border-radius:4px;cursor:pointer}",
     ".req:hover{background:#f5f8ff}",
     ".req .m{flex:none;width:46px;font-size:11px;font-weight:600;color:#98a2b3}",
@@ -627,7 +629,22 @@
     ".req .s.c4{color:#b54708}",
     ".req .s.bad{color:#d92d20}",
     ".req .act{flex:none;width:52px;text-align:right;opacity:0}",
-    ".req:hover .act,.req .act:focus-visible,.req .act.has{opacity:1}",
+    ".req:hover .act,.req.open .act,.req .act:focus-visible,.req .act.has{opacity:1}",
+    ".req .tw{flex:none;width:8px;font-size:9px;color:#98a2b3}",
+    ".req.open{background:#f5f8ff;border-bottom-color:transparent;border-radius:4px 4px 0 0}",
+    ".req:focus-visible{outline:2px solid #b2ccff;outline-offset:-2px}",
+    // 展开后的详情：完整地址 + 响应体，只读
+    ".detail{margin:0 -6px 6px;padding:8px 10px 10px;border:1px solid #d6e4ff;border-top:0;border-radius:0 0 6px 6px;background:#fafcff}",
+    ".detail .bar{display:flex;align-items:flex-start;gap:10px}",
+    ".detail .url{flex:1;min-width:0;padding-top:4px;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#344054;word-break:break-all}",
+    ".detail .meta{margin:6px 0;color:#667085}",
+    ".detail pre{margin:0;max-height:240px;padding:6px 8px;overflow:auto;border:1px solid #eaecf0;border-radius:5px;background:#fff;",
+    "  font-family:ui-monospace,Menlo,monospace;font-size:11px;white-space:pre-wrap;word-break:break-all}",
+    ".detail .none{color:#98a2b3}",
+    ".primary{flex:none;border-color:#1570ef;background:#1570ef;color:#fff}",
+    ".primary:hover{background:#175cd3}",
+    ".primary.has{border-color:#067647;background:#067647}",
+    ".primary.has:hover{background:#085d3a}",
     ".req .act.has{color:#067647}",
     "@media (hover:none){.req .act{opacity:1}}",
     ".sep{display:flex;align-items:center;gap:8px;margin:8px 0 2px;font-size:11px;color:#98a2b3}",
@@ -695,6 +712,9 @@
     let filterText = "";           // 最近请求的筛选词（小写）
     let showNoise = false;         // 是否显示页面预取和静态资源
     let rz = null;                 // 正在拖宽面板时的起点
+    let openKey = "";              // 最近请求里展开着的那一行（方法 + 路径）；空 = 都收着
+    let detailEl = null;           // 展开出来的详情
+    let recentDirty = false;       // 鼠标在详情里时来了新请求，先记着，移开再重画
     const pause = h("input", { type: "checkbox", onchange: function (e) { state.paused = e.target.checked; save(); } });
     const pauseLabel = h("label", { title: "所有规则临时失效，规则本身保留" }, [pause, "全部暂停"]);
     // 检查更新平时收在「⋯」里；查到新版本后，标题栏上另外亮一个「更新到 x.y.z」
@@ -713,7 +733,7 @@
     const tabRules = h("button", { className: "tab", onclick: function () { showTab("rules"); } }, ["规则", ruleCount]);
     const tabRecent = h("button", { className: "tab", onclick: function () { showTab("recent"); } }, "最近请求");
     const help = h("div", { className: "help", hidden: true }, [
-      h("div", null, "· 在「最近请求」里点一个接口，会带着它的真实返回建一条规则，在上面改状态码或响应体。"),
+      h("div", null, "· 在「最近请求」里点一个接口，先展开看它的返回；确认是它，再点「建规则」，在原返回上改状态码或响应体。"),
       h("div", null, "· 只对页面里 fetch / XHR 发的请求生效；页面跳转、文件下载、WebSocket 管不到。"),
       h("div", null, "· 规则存在当前站点，刷新后仍在，测完记得暂停或删掉。状态码填 0 = 网络错误。"),
       h("div", null, "· 最近请求在刷新页面后还在，关掉标签页才清空；也可以点「清空」。"),
@@ -760,7 +780,7 @@
           "含页面预取和静态资源",
         ]),
         h("button", { className: "link", title: "清空下面的请求列表（包括刷新前留下的），不影响规则",
-          onclick: function () { recent.length = 0; saveRecent(); renderRecent(); } }, "清空"),
+          onclick: function () { recent.length = 0; openKey = ""; saveRecent(); renderRecent(); } }, "清空"),
       ]),
       h("div", { className: "list" }, recentBox),
     ]);
@@ -1043,7 +1063,7 @@
       return null;
     }
 
-    // 点最近请求里的一行：已有规则就跳过去，没有就带着原返回建一条
+    // 点「建规则」：已有规则就跳过去，没有就带着原返回建一条
     function pickRequest(q) {
       const has = ruleFor(q);
       if (has) { focusRule(has); return; }
@@ -1249,31 +1269,90 @@
         : [h("div", { className: "empty", style: "margin-bottom:8px" }, [
           "还没有规则。到「",
           h("button", { className: "link", onclick: function () { showTab("recent"); } }, "最近请求"),
-          "」里点一个接口，或者点上面的「+ 新增规则」。",
+          "」里找到接口点「建规则」，或者点上面的「+ 新增规则」。",
         ])]);
     }
 
-    function requestRow(q) {
+    function requestKey(q) { return q.method + " " + q.path; }
+
+    // 点一行只是展开 / 收起，看它的返回；建规则要点行尾或详情里的按钮 —— 先确认是这个接口，再动手改
+    function requestRow(q, open) {
       const st = q.status;
       // 2xx 绿、3xx 蓝、4xx 橙、5xx 和没拿到状态码的（失败 / 网络错误 / 挂起）红
       const tone = typeof st !== "number" || st >= 500 || st < 200 ? " bad" : st >= 400 ? " c4" : st >= 300 ? " c3" : " c2";
       const parts = splitPath(briefPath(q.path));
       const has = ruleFor(q);
-      return h("div", { className: "req", onclick: function () { pickRequest(q); } }, [
+      function toggle() {
+        openKey = open ? "" : requestKey(q);
+        renderRecent();
+      }
+      return h("div", { className: "req" + (open ? " open" : ""), tabIndex: 0, title: open ? "点击收起" : "点击展开，看这个接口的返回",
+        onclick: toggle,
+        onkeydown: function (e) {
+          if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+          e.preventDefault();
+          toggle();
+        } }, [
+        h("span", { className: "tw" }, open ? "▾" : "▸"),
         h("span", { className: "m " + String(q.method).toLowerCase() }, q.method),
         h("code", { title: q.path }, [h("span", { className: "hd" }, parts[0]), h("span", { className: "tl" }, parts[1])]),
         q.count > 1 ? h("span", { className: "n", title: "这个接口一共请求了 " + q.count + " 次" }, "×" + q.count) : null,
         q.mocked ? h("span", { className: "tag", title: "这次的返回是规则给的，不是服务器的" }, "模拟") : null,
         h("span", { className: "s" + tone }, String(st)),
-        // 点击由整行接住，这个按钮只是给键盘留个落点
         h("button", { className: "link act" + (has ? " has" : ""),
-          title: has ? "这个接口已经有规则了，点击跳到那条规则" : "带入这个接口，以及它最近一次真实返回的状态码和响应体" },
+          title: has ? "这个接口已经有规则了，点击跳到那条规则" : "带入这个接口，以及它最近一次真实返回的状态码和响应体",
+          onclick: function (e) { e.stopPropagation(); pickRequest(q); } },
           has ? "已有规则" : "建规则"),
       ]);
     }
 
-    function renderRecent() {
+    // 同源只显示路径和参数；跨域的带上域名
+    function fullUrl(q) {
+      try {
+        const u = new URL(q.url, W.location.href);
+        return (u.origin === W.location.origin ? "" : u.origin) + u.pathname + u.search;
+      } catch (e) {
+        return q.url;
+      }
+    }
+
+    function requestDetail(q) {
+      const has = ruleFor(q);
+      const real = q.realStatus != null ? (q.realStatus === 0 ? "网络失败" : "状态码 " + q.realStatus) : "";
+      let meta;
+      if (q.body == null) {
+        meta = q.mocked ? "这次的返回是规则给的（" + q.status + "）。" : real ? real + "。" : "";
+      } else {
+        meta = (q.mocked ? "这次的返回是规则给的（" + q.status + "）。下面是最近一次真实返回：" : "")
+          + real + " · 响应体 " + q.body.length + " 个字符"
+          + (q.old ? " · 刷新页面之前抓到的" : "");
+      }
+      const el = h("div", { className: "detail", onmouseleave: function () {
+        if (!recentDirty) return;
+        recentDirty = false;
+        renderRecent();
+      } }, [
+        h("div", { className: "bar" }, [
+          h("div", { className: "url" }, q.method + " " + fullUrl(q)),
+          h("button", { className: "primary" + (has ? " has" : ""),
+            title: has ? "这个接口已经有规则了，跳到那条规则" : "带着下面这份返回建一条规则，在它上面改",
+            onclick: function () { pickRequest(q); } }, has ? "已有规则，去看看" : "用它建规则"),
+        ]),
+        meta ? h("div", { className: "meta" }, meta) : null,
+        q.body != null
+          ? h("pre", null, pretty(q.body))
+          : h("div", { className: "none" }, "没有留下这个接口的响应体：可能不是文本、内容太大，或者还没见过它的真实返回。建规则会用默认的 500。"),
+      ]);
+      return el;
+    }
+
+    // lazy：页面发了新请求引起的重画，可以等；人点出来的（筛选、展开、清空）不传，马上画
+    function renderRecent(lazy) {
       if (panel.hidden || tab !== "recent") return;
+      // 正在看、在滚、在选响应体的时候来了新请求：重画会把滚动位置和选中的文字弄丢，等鼠标移开再画
+      if (lazy === true && detailEl && detailEl.isConnected && detailEl.matches(":hover")) { recentDirty = true; return; }
+      recentDirty = false;
+      detailEl = null;
       const list = recent.filter(function (q) {
         if (q.noise && !showNoise) return false;
         return !filterText || (q.method + " " + q.path).toLowerCase().indexOf(filterText) >= 0;
@@ -1285,10 +1364,15 @@
       list.forEach(function (q) {
         if (q.old && !marked) {
           marked = true;
-          rows.push(h("div", { className: "sep", title: "刷新后还没再请求过的接口。照样可以点它建规则，带入的是刷新前抓到的返回" },
+          rows.push(h("div", { className: "sep", title: "刷新后还没再请求过的接口。照样可以展开看、建规则，用的是刷新前抓到的返回" },
             "刷新页面之前的请求"));
         }
-        rows.push(requestRow(q));
+        const open = requestKey(q) === openKey;
+        rows.push(requestRow(q, open));
+        if (open) {
+          detailEl = requestDetail(q);
+          rows.push(detailEl);
+        }
       });
       recentBox.replaceChildren.apply(recentBox, list.length ? rows.concat(more)
         : [h("div", { className: "empty" }, recent.length ? "没有符合的请求。" : "还没有抓到请求，在页面上操作一下。")].concat(more));
@@ -1315,7 +1399,8 @@
         if (el) { el.textContent = hitsText(r); el.classList.toggle("done", usedUp(r)); }
         api.badge();
       },
-      recent: renderRecent,
+      recent: function () { renderRecent(true); },
+      body: function (entry) { if (requestKey(entry) === openKey) renderRecent(true); },
       setHidden: setHidden,
       reload: function () { applyHidden(); if (!panel.hidden) render(); api.badge(); placeFab(); refreshMenu(); },
     };
