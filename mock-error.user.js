@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         接口报错模拟
 // @namespace    https://github.com/sleepray/Web-api-mock
-// @version      1.10.0
+// @version      1.10.1
 // @description  按规则把指定接口的返回改成 500、超时、空数据等，用来测前端的异常处理。只在浏览器这一侧生效。
 // @match        *://*/*
 // @run-at       document-start
@@ -518,6 +518,9 @@
     ".pane{flex:1;min-height:0;display:flex;flex-direction:column}",
     ".body{flex:1;min-height:0;padding:12px 14px;overflow:auto;border-radius:0 0 10px 10px}",
     ".tools{display:flex;align-items:center;gap:10px;padding:10px 14px 8px}",
+    ".tools .end{margin-left:auto}",
+    ".tools + .body{padding-top:4px}",
+    ".link.danger{color:#d92d20;font-weight:600}",
     ".tools label{display:flex;align-items:center;gap:4px;color:#667085;white-space:nowrap;cursor:pointer}",
     ".list{flex:1;min-height:0;padding:0 14px 10px;overflow:auto;border-radius:0 0 10px 10px}",
     // 拖宽用的侧边：面板往哪边长，它就在哪边（见 placePanel）
@@ -570,6 +573,8 @@
     ".req .n{flex:none;font-size:11px;color:#98a2b3}",
     ".req .tag{flex:none;padding:0 6px;border-radius:8px;font-size:11px;background:#fef3f2;color:#d92d20}",
     ".req .s{flex:none;min-width:28px;text-align:right;color:#667085;font-variant-numeric:tabular-nums}",
+    ".req .s.c2{color:#067647}",
+    ".req .s.c3{color:#1570ef}",
     ".req .s.c4{color:#b54708}",
     ".req .s.bad{color:#d92d20}",
     ".req .act{flex:none;width:52px;text-align:right;opacity:0}",
@@ -667,11 +672,33 @@
       helpBtn.classList.toggle("on", !help.hidden);
       placePanel();
     } }, "?");
-    const rulesBody = h("div", { className: "body" }, [
-      rulesBox,
-      h("button", { onclick: function () { addRule({}); } }, "+ 新增规则"),
+    // 清空规则删了就找不回来，所以要点两次：第一次只是把按钮变成红色的确认，3 秒不点就恢复原样
+    let clearArmed = 0;
+    const clearBtn = h("button", { className: "link end", title: "删除全部规则", onclick: function () {
+      if (!clearArmed) {
+        clearBtn.textContent = "再点一次，删除全部 " + state.rules.length + " 条规则";
+        clearBtn.classList.add("danger");
+        clearArmed = setTimeout(disarmClear, 3000);
+        return;
+      }
+      state.rules = [];
+      save();
+      renderRules();
+    } }, "清空");
+    function disarmClear() {
+      clearTimeout(clearArmed);
+      clearArmed = 0;
+      clearBtn.textContent = "清空";
+      clearBtn.classList.remove("danger");
+    }
+    const rulesBody = h("div", { className: "body" }, rulesBox);
+    const paneRules = h("div", { className: "pane" }, [
+      h("div", { className: "tools" }, [
+        h("button", { onclick: function () { addRule({}); } }, "+ 新增规则"),
+        clearBtn,
+      ]),
+      rulesBody,
     ]);
-    const paneRules = h("div", { className: "pane" }, rulesBody);
     const paneRecent = h("div", { className: "pane", hidden: true }, [
       h("div", { className: "tools" }, [
         h("input", { className: "grow", type: "text", placeholder: "筛选：方法或路径里的一段，如 post、/api/",
@@ -1162,18 +1189,21 @@
     function renderRules() {
       hitEls.clear();
       cardEls.clear();
+      disarmClear();
+      clearBtn.hidden = !state.rules.length;
       rulesBox.replaceChildren.apply(rulesBox, state.rules.length
         ? state.rules.map(ruleCard)
         : [h("div", { className: "empty", style: "margin-bottom:8px" }, [
           "还没有规则。到「",
           h("button", { className: "link", onclick: function () { showTab("recent"); } }, "最近请求"),
-          "」里点一个接口，或者手动新增。",
+          "」里点一个接口，或者点上面的「+ 新增规则」。",
         ])]);
     }
 
     function requestRow(q) {
       const st = q.status;
-      const tone = typeof st !== "number" || st >= 500 ? " bad" : st >= 400 ? " c4" : "";
+      // 2xx 绿、3xx 蓝、4xx 橙、5xx 和没拿到状态码的（失败 / 网络错误 / 挂起）红
+      const tone = typeof st !== "number" || st >= 500 || st < 200 ? " bad" : st >= 400 ? " c4" : st >= 300 ? " c3" : " c2";
       const parts = splitPath(briefPath(q.path));
       const has = ruleFor(q);
       return h("div", { className: "req", onclick: function () { pickRequest(q); } }, [
