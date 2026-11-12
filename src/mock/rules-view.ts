@@ -38,11 +38,26 @@ export type TRulesView = {
 };
 
 // 下拉框里只放短名字，解释放在 title 和下方的提示里：面板默认只有 440px 宽
-function modeOptions(): readonly { value: TMockMode; label: string }[] {
+function modeOptions(): readonly { value: TMockMode; label: string; title: string }[] {
     return [
-        { value: "block", label: tr("Block", "拦截") },
-        { value: "rewrite", label: tr("Pass through", "放行") },
-        { value: "hang", label: tr("Hang", "挂起") },
+        {
+            value: "block",
+            label: tr("Block", "拦截"),
+            title: tr("Not sent to the server; the page gets the rule's response", "不发到服务器，页面直接拿到规则的返回"),
+        },
+        {
+            value: "rewrite",
+            label: tr("Pass through", "放行"),
+            title: tr(
+                "Really sent and executed; only the response the page sees is replaced",
+                "真的发出并执行，只把页面看到的返回换掉",
+            ),
+        },
+        {
+            value: "hang",
+            label: tr("Hang", "挂起"),
+            title: tr("Not sent and never answered", "不发，也一直不返回"),
+        },
     ];
 }
 
@@ -68,21 +83,23 @@ export function rulesViewStyle(root: string): string {
             min-height: 0;
             border-top: var(--nri-hairline) solid var(--nri-separator);
         }
+        /* 顶栏和请求列表的筛选栏一样：同样的内边距和控件高度 */
         ${R} .nri-rules-bar {
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 8px 10px 6px 12px;
+            gap: 8px;
+            padding: 0 8px 6px;
             flex-shrink: 0;
         }
-        ${R} .nri-rules-bar label {
+        ${R} .nri-rules-pause {
             display: inline-flex;
             align-items: center;
-            gap: 5px;
+            gap: 6px;
             color: var(--nri-label-secondary);
+            font-size: 11px;
             white-space: nowrap;
         }
-        ${R} .nri-rules-bar label.nri-paused {
+        ${R} .nri-rules-pause.nri-paused {
             color: var(--nri-orange);
             font-weight: 600;
         }
@@ -92,11 +109,36 @@ export function rulesViewStyle(root: string): string {
             font-size: 11px;
             flex-shrink: 0;
         }
+        /* 列表区和请求列表同底色、同分隔线、同滚动条 */
         ${R} .nri-rules-list {
             flex: 1;
-            min-height: 0;
+            min-height: 44px;
             overflow: auto;
-            padding: 0 8px 8px;
+            padding: 0 12px;
+            border-top: var(--nri-hairline) solid var(--nri-separator);
+            background: var(--nri-sidebar);
+        }
+        ${R} .nri-rules-list::-webkit-scrollbar,
+        ${R} textarea.nri-rule-body::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+        ${R} .nri-rules-list::-webkit-scrollbar-track,
+        ${R} .nri-rules-list::-webkit-scrollbar-corner,
+        ${R} textarea.nri-rule-body::-webkit-scrollbar-track,
+        ${R} textarea.nri-rule-body::-webkit-scrollbar-corner,
+        ${R} textarea.nri-rule-body::-webkit-resizer {
+            background: transparent;
+        }
+        ${R} .nri-rules-list::-webkit-scrollbar-thumb,
+        ${R} textarea.nri-rule-body::-webkit-scrollbar-thumb {
+            border: 3px solid transparent;
+            border-radius: 5px;
+            background: var(--nri-scrollbar-thumb) padding-box;
+        }
+        ${R} .nri-rules-list::-webkit-scrollbar-thumb:hover,
+        ${R} textarea.nri-rule-body::-webkit-scrollbar-thumb:hover {
+            background-color: var(--nri-scrollbar-thumb-hover);
         }
         ${R} .nri-rules-empty {
             padding: 18px 8px;
@@ -104,21 +146,24 @@ export function rulesViewStyle(root: string): string {
             text-align: center;
             line-height: 1.5;
         }
+        /* 一条规则一节，用细分隔线隔开，不再套圆角卡片 */
         ${R} .nri-rule {
-            margin-bottom: 8px;
-            padding: 8px;
-            border-radius: 8px;
-            background: var(--nri-row-alt);
-            box-shadow: inset 0 0 0 var(--nri-hairline) var(--nri-separator);
-            transition: box-shadow 0.3s ease;
+            padding: 10px 0;
+            border-bottom: var(--nri-hairline) solid var(--nri-separator);
+            transition: background-color 0.3s ease;
+        }
+        ${R} .nri-rule:last-child {
+            border-bottom: 0;
         }
         ${R} .nri-rule.nri-rule-off > :not(:first-child) {
             opacity: 0.5;
         }
+        /* 定位到某条规则时整节闪一下底色；用阴影铺满左右留白，不改布局 */
         ${R} .nri-rule.nri-rule-flash {
+            background: var(--nri-selection-inactive);
             box-shadow:
-                inset 0 0 0 1px var(--nri-focus-border),
-                0 0 0 3px var(--nri-focus-ring);
+                -12px 0 0 var(--nri-selection-inactive),
+                12px 0 0 var(--nri-selection-inactive);
         }
         ${R} .nri-rule-row {
             display: flex;
@@ -132,14 +177,8 @@ export function rulesViewStyle(root: string): string {
             font-size: 11px;
             white-space: nowrap;
         }
-        ${R} .nri-check {
-            width: 13px;
-            height: 13px;
-            margin: 0;
-            accent-color: var(--nri-selection);
-            flex: 0 0 auto;
-        }
-        /* 页面常会给 input / select / textarea 设白底、边框和字号（甚至 !important），面板主题必须优先 */
+        /* 页面常会给 input / select / textarea 设白底、边框和字号（甚至 !important），面板主题必须优先。
+           外观和请求列表的筛选框一致 */
         ${R} .nri-field {
             height: 22px;
             margin: 0;
@@ -154,14 +193,29 @@ export function rulesViewStyle(root: string): string {
             outline: none !important;
             min-width: 0;
         }
+        ${R} .nri-field::placeholder {
+            color: var(--nri-label-tertiary);
+        }
         ${R} .nri-field:focus {
             box-shadow:
                 inset 0 0 0 1px var(--nri-focus-border),
                 0 0 0 3px var(--nri-focus-ring);
         }
+        /* 下拉框、数字框、编辑框的原生部件（下拉列表、滚动条）跟着面板的明暗走 */
+        ${R}[data-nri-theme="dark"] .nri-field {
+            color-scheme: dark;
+        }
+        ${R}[data-nri-theme="light"] .nri-field {
+            color-scheme: light;
+        }
         ${R} select.nri-field {
-            padding: 0 2px 0 4px;
-            color-scheme: light dark;
+            -webkit-appearance: none;
+            appearance: none;
+            padding: 0 20px 0 7px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238c8c8c' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9.5 6 6 6-6'/%3E%3C/svg%3E") !important;
+            background-repeat: no-repeat !important;
+            background-position: right 6px center !important;
+            background-size: 10px !important;
         }
         ${R} select.nri-field option {
             background: var(--nri-menu-opaque);
@@ -172,8 +226,15 @@ export function rulesViewStyle(root: string): string {
             min-width: 120px;
         }
         ${R} .nri-field-num {
-            width: 58px;
+            width: 52px;
+            -moz-appearance: textfield;
+            appearance: textfield;
             font-variant-numeric: tabular-nums;
+        }
+        ${R} .nri-field-num::-webkit-inner-spin-button,
+        ${R} .nri-field-num::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
         }
         ${R} .nri-rule-hits {
             margin-left: auto;
@@ -190,54 +251,40 @@ export function rulesViewStyle(root: string): string {
             flex-wrap: wrap;
             align-items: center;
             gap: 4px;
-            margin-bottom: 6px;
+            margin-bottom: 8px;
         }
-        ${R} .nri-chip {
-            height: 18px;
-            padding: 0 7px;
-            border: 0;
-            border-radius: 9px;
-            background: var(--nri-fill);
-            color: var(--nri-label);
-            font-size: 11px;
-            white-space: nowrap;
-        }
-        ${R} .nri-chip:hover {
-            background: var(--nri-fill-pressed);
-        }
-        ${R} .nri-chip.nri-chip-end {
+        ${R} .nri-chips .nri-text-btn {
             margin-left: auto;
-            color: var(--nri-blue);
+            font-size: 11px;
         }
-        ${R} .nri-rule-bodywrap {
-            position: relative;
+        ${R} .nri-rule-bodyhead {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
         }
+        ${R} .nri-rule-bodyhead .nri-text-btn {
+            margin-left: auto;
+            font-size: 11px;
+        }
+        /* 编辑框和详情区的源码视图一致：等宽 11px、行高 1.5 */
         ${R} textarea.nri-rule-body {
             display: block;
             width: 100%;
             height: 44px;
             min-height: 44px;
-            padding: 5px 7px;
+            padding: 6px 8px;
             resize: vertical;
             overflow: auto;
             white-space: pre;
             font-family: var(--nri-font-mono) !important;
             font-size: 11px !important;
             line-height: 1.5 !important;
+            scrollbar-color: var(--nri-scrollbar-thumb) transparent;
             user-select: text;
         }
         ${R} textarea.nri-rule-body.nri-invalid {
             box-shadow: inset 0 0 0 1px var(--nri-red);
-        }
-        /* 「Format」浮在编辑框右上角，不占一行；往左让开滚动条 */
-        ${R} .nri-rule-format {
-            position: absolute;
-            top: 4px;
-            right: 18px;
-            opacity: 0.85;
-        }
-        ${R} .nri-rule-format:hover {
-            opacity: 1;
         }
         ${R} .nri-rule-error {
             margin-top: 4px;
@@ -292,6 +339,66 @@ function button(className: string, text: string, title: string, onClick: () => v
     node.title = title;
     node.addEventListener("click", onClick);
     return node;
+}
+
+const kXmarkSvg =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 6 12 12"/><path d="M18 6 6 18"/></svg>';
+
+/** 按下不抢焦点，和面板工具栏的按钮一样 */
+function keepFocusOnPress(node: HTMLElement): void {
+    node.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+    });
+}
+
+/** 和设置里「测试版」一样的开关 */
+function createSwitch(label: string, onToggle: (on: boolean) => void): { el: HTMLButtonElement; set: (on: boolean) => void } {
+    const node = el("button", "nri-switch");
+    node.type = "button";
+    node.setAttribute("role", "switch");
+    node.title = label;
+    node.setAttribute("aria-label", label);
+    keepFocusOnPress(node);
+    node.addEventListener("click", () => onToggle(node.getAttribute("aria-checked") !== "true"));
+    return {
+        el: node,
+        set: (on) => {
+            node.setAttribute("aria-checked", on ? "true" : "false");
+        },
+    };
+}
+
+/** 和工具栏 All | Failed | Mocked 一样的分段控件 */
+function createSegments<T extends string>(
+    label: string,
+    segments: readonly { value: T; label: string; title: string }[],
+    onChange: (value: T) => void,
+): { el: HTMLDivElement; set: (value: T) => void } {
+    const group = el("div", "nri-segmented");
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", label);
+    const buttons = segments.map((segment) => {
+        const node = el("button", "nri-segment", segment.label);
+        node.type = "button";
+        node.dataset.value = segment.value;
+        node.title = segment.title;
+        keepFocusOnPress(node);
+        node.addEventListener("click", () => {
+            if (node.getAttribute("aria-pressed") !== "true") {
+                onChange(segment.value);
+            }
+        });
+        group.appendChild(node);
+        return node;
+    });
+    return {
+        el: group,
+        set: (value) => {
+            for (const node of buttons) {
+                node.setAttribute("aria-pressed", node.dataset.value === value ? "true" : "false");
+            }
+        },
+    };
 }
 
 function hitsText(rule: TMockRule): string {
@@ -376,10 +483,7 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
     const card = el("div", "nri-rule");
 
     // ---- 第一行：启用 | 方法 | 地址匹配 | 删除 ----
-    const enabled = el("input", "nri-check");
-    enabled.type = "checkbox";
-    enabled.title = tr("Enable this rule", "启用这条规则");
-    enabled.addEventListener("change", () => update({ on: enabled.checked }));
+    const enabled = createSwitch(tr("Enable this rule", "启用这条规则"), (on) => update({ on }));
 
     const method = el("select", "nri-field");
     method.title = tr("Request method", "请求方法");
@@ -402,10 +506,14 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
     match.setAttribute("aria-label", tr("URL match", "URL 匹配"));
     match.addEventListener("input", () => update({ match: match.value }));
 
-    const remove = button("nri-btn", "✕", tr("Delete this rule", "删除这条规则"), () => removeMockRule(rule.id));
+    // 和详情区右上角的关闭按钮同一个样式
+    const remove = button("nri-close-btn", "", tr("Delete this rule", "删除这条规则"), () => removeMockRule(rule.id));
+    remove.innerHTML = kXmarkSvg;
+    remove.setAttribute("aria-label", remove.title);
+    keepFocusOnPress(remove);
 
     const head = el("div", "nri-rule-row");
-    head.append(enabled, method, match, remove);
+    head.append(enabled.el, method, match, remove);
 
     // ---- 第二行：状态码 | 模式 | 延迟 | 次数上限 | 命中次数 ----
     function numberField(key: "status" | "delay" | "times", title: string): HTMLInputElement {
@@ -431,17 +539,7 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
         ),
     );
 
-    const mode = el("select", "nri-field");
-    mode.title = tr(
-        "Block: not sent, the rule answers. Pass through: really sent and executed, the page sees the rule's response. Hang: not sent, never answers",
-        "拦截：不发到服务器，直接给规则的返回。放行：真的发出并执行，页面看到规则的返回。挂起：不发，也一直不返回",
-    );
-    for (const { value, label } of modeOptions()) {
-        const option = el("option", undefined, label);
-        option.value = value;
-        mode.appendChild(option);
-    }
-    mode.addEventListener("change", () => update({ mode: mode.value as TMockMode }, true));
+    const mode = createSegments(tr("Mode", "模式"), modeOptions(), (value) => update({ mode: value }, true));
 
     const hits = el("span", "nri-rule-hits");
     const resetHits = button("nri-text-btn", tr("Reset", "清零"), tr("Set the hit count back to 0", "命中次数清零"), () =>
@@ -450,7 +548,7 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
 
     // 默认面板只有 440px 宽，分两行固定排布，免得随宽度折得七零八落
     const settings = el("div", "nri-rule-row");
-    settings.append(el("span", "nri-rule-label", tr("Respond", "返回")), status, mode, hits, resetHits);
+    settings.append(el("span", "nri-rule-label", tr("Respond", "返回")), status, mode.el, hits, resetHits);
     const timing = el("div", "nri-rule-row");
     timing.append(
         el("span", "nri-rule-label", tr("Delay", "延迟")),
@@ -473,11 +571,11 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
     const presets = el("div", "nri-chips");
     presets.append(el("span", "nri-rule-label", tr("Presets", "预设")));
     for (const preset of getMockPresets()) {
-        presets.append(button("nri-chip", preset.label, preset.title, () => applyChange(applyPreset(rule, preset))));
+        presets.append(button("nri-type-chip", preset.label, preset.title, () => applyChange(applyPreset(rule, preset))));
     }
     presets.append(
         button(
-            "nri-chip nri-chip-end",
+            "nri-text-btn",
             tr("↺ Reset", "↺ 复原"),
             tr(
                 "Back to the captured response: restore status and body, block mode, no delay",
@@ -587,7 +685,7 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
     });
 
     const format = button(
-        "nri-push-btn nri-rule-format",
+        "nri-text-btn",
         tr("Format", "格式化"),
         tr(
             "Re-indent the JSON; broken JSON (missing quotes, commas, brackets) is repaired first",
@@ -595,10 +693,10 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
         ),
         formatBody,
     );
-    const bodyWrap = el("div", "nri-rule-bodywrap");
-    bodyWrap.append(body, format);
+    const bodyHead = el("div", "nri-rule-bodyhead");
+    bodyHead.append(el("span", "nri-rule-label", tr("Response body", "响应体")), format);
 
-    card.append(head, settings, timing, presets, bodyWrap, errorLine, fixNote, note);
+    card.append(head, settings, timing, presets, bodyHead, body, errorLine, fixNote, note);
 
     function setValue(field: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, value: string): void {
         if ((forceSync || document.activeElement !== field) && field.value !== value) {
@@ -610,11 +708,11 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
         const bodyChanged = next.body !== body.value;
         rule = next;
         card.classList.toggle("nri-rule-off", !rule.on);
-        enabled.checked = rule.on;
+        enabled.set(rule.on);
         setValue(method, rule.method);
         setValue(match, rule.match);
         setValue(status, String(rule.status));
-        setValue(mode, rule.mode);
+        mode.set(rule.mode);
         setValue(delay, String(rule.delay));
         setValue(times, String(rule.times));
         setValue(body, rule.body);
@@ -650,12 +748,13 @@ export function createRulesView(options: TRulesViewOptions): TRulesView {
         cards.get(rule.id)?.el.querySelector<HTMLInputElement>('input[type="text"]')?.focus();
     });
 
-    const pause = el("input", "nri-check");
-    pause.type = "checkbox";
-    pause.addEventListener("change", () => setMockPaused(pause.checked));
-    const pauseLabel = el("label");
-    pauseLabel.title = tr("Turn every rule off for now; the rules themselves are kept", "所有规则临时失效，规则本身保留");
-    pauseLabel.append(pause, tr("Pause All", "全部暂停"));
+    const pauseTitle = tr("Turn every rule off for now; the rules themselves are kept", "所有规则临时失效，规则本身保留");
+    const pause = createSwitch(pauseTitle, (on) => setMockPaused(on));
+    const pauseLabel = el("span", "nri-rules-pause");
+    const pauseText = el("span", undefined, tr("Pause All", "全部暂停"));
+    pauseText.title = pauseTitle;
+    pauseText.addEventListener("click", () => setMockPaused(!isMockPaused()));
+    pauseLabel.append(pauseText, pause.el);
 
     // 清空的规则找不回来，所以要点两次：第一次只是把按钮变成红色的确认，3 秒不点就恢复原样
     let clearTimer: ReturnType<typeof setTimeout> | undefined;
@@ -737,7 +836,7 @@ export function createRulesView(options: TRulesViewOptions): TRulesView {
             cards.get(rule.id)?.sync(rule);
         }
         const paused = isMockPaused();
-        pause.checked = paused;
+        pause.set(paused);
         pauseLabel.classList.toggle("nri-paused", paused);
         clearBtn.hidden = rules.length === 0;
         hint.hidden = rules.length === 0;
