@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output：生产构建产物入库（从 GitHub 安装和更新靠它），开发构建不入库
+dist/dev/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# TypeScript
+*.tsbuildinfo
+
+# Env / local config
+.env
+.env.*
+!.env.example

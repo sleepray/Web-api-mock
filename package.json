@@ -1,0 +1,27 @@
+{
+    "name": "network-request-inspector",
+    "version": "0.4.0",
+    "description": "Tampermonkey userscript: inspect page fetch/XHR, copy request + response, and mock responses with rules",
+    "author": "Sower",
+    "license": "UNLICENSED",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "concurrently -n \"server,build\" -c \"magenta.bold,cyan.bold\" \"pnpm dev:server\" \"pnpm build:dev\"",
+        "dev:server": "tsx src/dev-server.ts",
+        "build:dev": "tsdown --watch -c tsdown.dev.config.mts",
+        "build": "tsdown -c tsdown.prod.config.mts",
+        "test": "vitest run",
+        "typecheck": "tsc --noEmit"
+    },
+    "devDependencies": {
+        "@types/node": "^26.6.5",
+        "@types/tampermonkey": "^5.0.5",
+        "concurrently": "^9.2.1",
+        "dotenv": "^17.4.2",
+        "tsdown": "^0.23.0",
+        "tsx": "^4.21.0",
+        "typescript": "^5.2.2",
+        "vitest": "^5.0.3"
+    }
+}
