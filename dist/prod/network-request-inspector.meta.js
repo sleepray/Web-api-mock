@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Network Request Inspector + Mock
 // @namespace    https://github.com/sleepray/Web-api-mock
-// @version      0.5.1
+// @version      0.5.2
 // @description  Inspect page fetch/XHR requests, copy them, and mock their responses with rules
 // @author       Sower
 // @updateURL    https://raw.githubusercontent.com/sleepray/Web-api-mock/main/dist/prod/network-request-inspector.meta.js

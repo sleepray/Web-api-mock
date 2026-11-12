@@ -1,6 +1,6 @@
 {
     "name": "network-request-inspector",
-    "version": "0.5.1",
+    "version": "0.5.2",
     "description": "Tampermonkey userscript: inspect page fetch/XHR, copy request + response, and mock responses with rules",
     "author": "Sower",
     "license": "UNLICENSED",

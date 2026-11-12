@@ -4210,9 +4210,12 @@ export function mountPanel({
             event.stopPropagation();
             return;
         }
-        // 规则视图里全是输入框：面板的快捷键一律不管，只有 Esc —— 在输入框里先退出输入框，再按一次回到请求列表
+        // 规则视图里全是输入框：面板的快捷键只留 ⌘F（在响应体里查找）和 Esc —— 在输入框里先退出输入框，再按一次回到请求列表
         if (view === "rules") {
-            if (event.key === "Escape" && !event.isComposing) {
+            if (isCommandKey(event, "f")) {
+                event.preventDefault();
+                rulesView.openFind(event.target);
+            } else if (event.key === "Escape" && !event.isComposing) {
                 event.preventDefault();
                 if (isEditableTarget(event) && event.target instanceof HTMLElement) {
                     event.target.blur();
