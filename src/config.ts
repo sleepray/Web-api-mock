@@ -52,6 +52,8 @@ export const kConfig = {
     betaCheckDateStorageKey: "nri-beta-check-date",
     /** 全局存储键：用户上次看到的版本，升级后据此显示期间的更新说明 */
     seenVersionStorageKey: "nri-seen-version",
+    /** 全局存储键：界面语言 auto | en | zh */
+    languageStorageKey: "nri-language",
     /** localStorage 键：这个网站的 mock 规则和「全部暂停」。按站点存，规则不该跨站生效 */
     mockRulesStorageKey: "nri-mock-rules",
     /** 旧版独立 mock 脚本存规则用的 localStorage 键，首次运行时搬过来 */

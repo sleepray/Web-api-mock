@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { applyPreset, emptyLists, errorBody, kMockPresets, resetRule, type TMockPreset } from "./presets";
+import { applyPreset, emptyLists, errorBody, getMockPresets, resetRule, type TMockPreset } from "./presets";
 import { normalizeRule } from "./rules";
 
 function preset(label: string): TMockPreset {
-    const found = kMockPresets.find((item) => item.label === label);
+    const found = getMockPresets().find((item) => item.label === label);
     if (found === undefined) {
         throw new Error(`No preset ${label}`);
     }

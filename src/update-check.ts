@@ -1,3 +1,4 @@
+import { tr } from "./i18n";
 import { compareSemver } from "./semver";
 
 export type TUpdateCheckResult =
@@ -22,21 +23,21 @@ export function evaluateUpdateManifest({
     try {
         manifest = JSON.parse(body);
     } catch {
-        return { status: "failed", reason: "Update manifest is not valid JSON" };
+        return { status: "failed", reason: tr("Update manifest is not valid JSON", "版本清单不是合法的 JSON") };
     }
     const latest =
         typeof manifest === "object" && manifest !== null
             ? (manifest as { version?: unknown }).version
             : undefined;
     if (typeof latest !== "string") {
-        return { status: "failed", reason: "Update manifest has no version" };
+        return { status: "failed", reason: tr("Update manifest has no version", "版本清单里没有版本号") };
     }
     try {
         return compareSemver(latest, currentVersion) > 0
             ? { status: "available", version: latest }
             : { status: "up-to-date" };
     } catch {
-        return { status: "failed", reason: `Invalid version ${JSON.stringify(latest)}` };
+        return { status: "failed", reason: tr(`Invalid version ${JSON.stringify(latest)}`, `版本号不合法：${JSON.stringify(latest)}`) };
     }
 }
 
@@ -53,7 +54,7 @@ export function checkForUpdate({
 }): Promise<TUpdateCheckResult> {
     return new Promise((resolve) => {
         if (typeof GM_xmlhttpRequest !== "function") {
-            resolve({ status: "failed", reason: "Update check is unavailable in this build" });
+            resolve({ status: "failed", reason: tr("Update check is unavailable in this build", "这个构建不支持检查更新") });
             return;
         }
         GM_xmlhttpRequest({
@@ -63,13 +64,13 @@ export function checkForUpdate({
             headers: { "Cache-Control": "no-cache" },
             onload: (response) => {
                 if (response.status !== 200) {
-                    resolve({ status: "failed", reason: `Update server returned HTTP ${response.status}` });
+                    resolve({ status: "failed", reason: tr(`Update server returned HTTP ${response.status}`, `更新服务器返回了 HTTP ${response.status}`) });
                     return;
                 }
                 resolve(evaluateUpdateManifest({ body: response.responseText, currentVersion }));
             },
-            onerror: () => resolve({ status: "failed", reason: "Could not reach the update server" }),
-            ontimeout: () => resolve({ status: "failed", reason: "Update check timed out" }),
+            onerror: () => resolve({ status: "failed", reason: tr("Could not reach the update server", "连不上更新服务器") }),
+            ontimeout: () => resolve({ status: "failed", reason: tr("Update check timed out", "检查更新超时") }),
         });
     });
 }

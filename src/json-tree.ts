@@ -1,3 +1,4 @@
+import { tr } from "./i18n";
 import { matchSpans } from "./text-find";
 
 /** 可折叠 JSON 树：子节点在首次展开时才构建，大数组按块追加，避免一次渲染整棵大树 */
@@ -120,7 +121,10 @@ function createNode(
     collapsedTail.append(
         span(
             "nri-json-summary",
-            `${entries.length} ${noun}${entries.length === 1 ? "" : "s"}`,
+            tr(
+                `${entries.length} ${noun}${entries.length === 1 ? "" : "s"}`,
+                `${entries.length} ${noun === "key" ? "个字段" : "项"}`,
+            ),
         ),
         span("nri-json-punct", `${close}${comma}`),
     );
@@ -155,7 +159,10 @@ function createNode(
             moreButton = document.createElement("button");
             moreButton.type = "button";
             moreButton.className = "nri-json-more";
-            moreButton.textContent = `Show More (${entries.length - rendered} remaining)`;
+            moreButton.textContent = tr(
+                `Show More (${entries.length - rendered} remaining)`,
+                `显示更多（还有 ${entries.length - rendered} 项）`,
+            );
             moreButton.addEventListener("click", renderMore);
             children.appendChild(moreButton);
         }

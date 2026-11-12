@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import { statusReason } from "../format";
 
 import type { TMockRule } from "./rules";
@@ -15,27 +16,47 @@ export type TMockPreset = {
     hang?: boolean;
 };
 
-const kErrorBodyNote = "the body becomes an error payload";
-
-export const kMockPresets: readonly TMockPreset[] = [
-    { label: "500", status: 500, title: `Internal Server Error; ${kErrorBodyNote}` },
-    { label: "502", status: 502, title: `Bad Gateway; ${kErrorBodyNote}` },
-    { label: "504", status: 504, title: `Gateway Timeout; ${kErrorBodyNote}` },
-    { label: "401", status: 401, title: `Unauthorized or session expired; ${kErrorBodyNote}` },
-    { label: "403", status: 403, title: `Forbidden; ${kErrorBodyNote}` },
-    { label: "Offline", status: 0, title: "Network error: the request never reaches the server" },
-    { label: "Slow 3s", delay: 3000, title: "Keep everything else and respond after 3 seconds" },
-    {
-        label: "Empty list",
-        empty: true,
-        title: "Respond 200 with the lists in the body emptied (needs the captured response)",
-    },
-    {
-        label: "Never respond",
-        hang: true,
-        title: "Leave the request pending to check loading states and the page's own timeout",
-    },
-];
+/** 按当前语言给出预设；是函数而不是常量：文案要在界面创建时按语言取 */
+export function getMockPresets(): readonly TMockPreset[] {
+    const note = tr("the body becomes an error payload", "响应体换成对应的报错内容");
+    return [
+        { label: "500", status: 500, title: tr(`Internal Server Error; ${note}`, `服务器内部错误，${note}`) },
+        { label: "502", status: 502, title: tr(`Bad Gateway; ${note}`, `网关错误，${note}`) },
+        { label: "504", status: 504, title: tr(`Gateway Timeout; ${note}`, `网关超时，${note}`) },
+        {
+            label: "401",
+            status: 401,
+            title: tr(`Unauthorized or session expired; ${note}`, `未登录或登录失效，${note}`),
+        },
+        { label: "403", status: 403, title: tr(`Forbidden; ${note}`, `没有权限，${note}`) },
+        {
+            label: tr("Offline", "断网"),
+            status: 0,
+            title: tr("Network error: the request never reaches the server", "网络错误：请求发不出去"),
+        },
+        {
+            label: tr("Slow 3s", "慢 3 秒"),
+            delay: 3000,
+            title: tr("Keep everything else and respond after 3 seconds", "其它不变，等 3 秒再返回"),
+        },
+        {
+            label: tr("Empty list", "空列表"),
+            empty: true,
+            title: tr(
+                "Respond 200 with the lists in the body emptied (needs the captured response)",
+                "返回 200，把响应体里的列表清空（需要先带入真实返回）",
+            ),
+        },
+        {
+            label: tr("Never respond", "不返回"),
+            hang: true,
+            title: tr(
+                "Leave the request pending to check loading states and the page's own timeout",
+                "请求一直挂着：看加载中的样子和前端自己的超时处理",
+            ),
+        },
+    ];
+}
 
 /**
  * 报错时的响应体 `{code, message}`。
@@ -114,7 +135,10 @@ export function applyPreset(rule: TMockRule, preset: TMockPreset): TRuleChange {
         const emptied = emptyLists(rule.body);
         if (emptied === undefined) {
             return {
-                error: "No list found in the response body. Create the rule from a captured request, then use Empty list.",
+                error: tr(
+                    "No list found in the response body. Create the rule from a captured request, then use Empty list.",
+                    "响应体里没找到列表。先从抓到的请求建规则，再点「空列表」。",
+                ),
             };
         }
         next.status = 200;
@@ -147,7 +171,10 @@ export function resetRule(
     const orig = rule.orig ?? fallback;
     if (orig === undefined) {
         return {
-            error: "No original response for this request yet. Disable the rule, let the page make the real request once, then reset.",
+            error: tr(
+                "No original response for this request yet. Disable the rule, let the page make the real request once, then reset.",
+                "还没有这个接口的真实返回。先取消勾选这条规则，让页面真实请求一次，再点「复原」。",
+            ),
         };
     }
     return {

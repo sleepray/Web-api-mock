@@ -1,3 +1,4 @@
+import { loadLanguagePreference, resolveLanguage, setLanguage, tr } from "./i18n";
 import { getPageWindow, installNetworkInterceptors } from "./intercept";
 import { installMockStorageSync } from "./mock/rule-store";
 import { loadSessionRecords, saveSessionRecords } from "./session-records";
@@ -26,7 +27,10 @@ function warnLegacyMockScript(): void {
         if (page.__apiMockErr === true) {
             showToast(
                 "warning",
-                "The old standalone mock script is still installed. Remove it in Tampermonkey — its rules have been moved here.",
+                tr(
+                    "The old standalone mock script is still installed. Remove it in Tampermonkey — its rules have been moved here.",
+                    "旧版独立的接口报错模拟脚本还装着，请在 Tampermonkey 里删掉它；它的规则已经搬到这里了。",
+                ),
                 8000,
             );
         }
@@ -53,6 +57,8 @@ function boot(): void {
     }
     g[kBootKey] = true;
 
+    // 界面语言要在建面板之前定下来
+    setLanguage(resolveLanguage(loadLanguagePreference()));
     installNetworkInterceptors();
     installMockStorageSync();
     // 刷新后接着显示刷新前的请求；离开页面时再存一次（清空过就存成空的）

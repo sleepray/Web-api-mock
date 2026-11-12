@@ -1,3 +1,5 @@
+import { tr } from "../i18n";
+
 /**
  * 响应体编辑框用的 JSON 校验、修复和排版。
  *
@@ -36,20 +38,22 @@ export function jsonError(text: string): string {
     }
 }
 
-const kFixLabels: readonly [TJsonFixKind, string, string][] = [
-    ["quote", "quote", "quotes"],
-    ["comma", "missing comma", "missing commas"],
-    ["extra", "extra comma", "extra commas"],
-    ["bracket", "bracket", "brackets"],
-    ["colon", "colon", "colons"],
-    ["other", "other fix", "other fixes"],
+/** [种类, 英文单数, 英文复数, 中文] */
+const kFixLabels: readonly [TJsonFixKind, string, string, string][] = [
+    ["quote", "quote", "quotes", "引号"],
+    ["comma", "missing comma", "missing commas", "补逗号"],
+    ["extra", "extra comma", "extra commas", "去掉多余的逗号"],
+    ["bracket", "bracket", "brackets", "补括号"],
+    ["colon", "colon", "colons", "补冒号"],
+    ["other", "other fix", "other fixes", "其它"],
 ];
 
 function summarize(fixes: TJsonFixes): string {
-    return kFixLabels
-        .filter(([kind]) => (fixes[kind] ?? 0) > 0)
-        .map(([kind, one, many]) => `${fixes[kind]} ${fixes[kind] === 1 ? one : many}`)
-        .join(", ");
+    const parts = kFixLabels.filter(([kind]) => (fixes[kind] ?? 0) > 0);
+    return tr(
+        parts.map(([kind, one, many]) => `${fixes[kind]} ${fixes[kind] === 1 ? one : many}`).join(", "),
+        parts.map(([kind, , , zh]) => `${zh} ${fixes[kind]} 处`).join("、"),
+    );
 }
 
 const kPlainEscapes: Record<string, string> = {
@@ -411,14 +415,14 @@ export type TJsonFormatResult =
 export function formatJson(text: string): TJsonFormatResult {
     const trimmed = text.trim();
     if (!looksLikeJson(trimmed)) {
-        return { error: "The body is not JSON, so there is nothing to format" };
+        return { error: tr("The body is not JSON, so there is nothing to format", "响应体不是 JSON，没有可以排版的") };
     }
     try {
         return { text: JSON.stringify(JSON.parse(trimmed), null, 2) };
     } catch {
         const repaired = repairJson(trimmed);
         if (repaired === undefined) {
-            return { error: "This JSON cannot be repaired automatically; fix it by hand" };
+            return { error: tr("This JSON cannot be repaired automatically; fix it by hand", "这段 JSON 自动修不了，得照着提示手动改") };
         }
         return { text: repaired.text, fixed: repaired.summary };
     }

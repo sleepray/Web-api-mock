@@ -4,6 +4,9 @@
  * while the pointer moves on from one just shown, as along a toolbar.
  */
 export const kTooltipDelayMs = 1500;
+/** 按钮、分段控件、筛选标签：光看图标或短标签看不懂，提示要快一点出来 */
+export const kControlTooltipDelayMs = 400;
+const kControlSelector = "button, .nri-segment, .nri-type-chip, .nri-keycap, label";
 const kInstantForMs = 200;
 const kPointerGap = 12;
 const kViewportMargin = 4;
@@ -53,7 +56,7 @@ function closestElement(
  * tooltip lives in root, which must have no transform or filter (it is
  * fixed) so that it inherits the panel's theme tokens.
  */
-export function installTooltips(root: HTMLElement): void {
+export function installTooltips(root: HTMLElement, signal?: AbortSignal): void {
     let tooltip: HTMLDivElement | undefined;
     // The element hovered, with the titled elements around it whose titles
     // are moved aside, where the pointer is on it, the tooltip's timer, and
@@ -158,7 +161,10 @@ export function installTooltips(root: HTMLElement): void {
         if (instant) {
             showActive();
         } else {
-            timer = window.setTimeout(showActive, kTooltipDelayMs);
+            timer = window.setTimeout(
+                showActive,
+                target.matches(kControlSelector) ? kControlTooltipDelayMs : kTooltipDelayMs,
+            );
         }
     };
 
@@ -217,5 +223,6 @@ export function installTooltips(root: HTMLElement): void {
     root.addEventListener("mouseleave", onLeave, true);
     root.addEventListener("mousedown", dismiss, true);
     root.addEventListener("scroll", dismiss, true);
-    window.addEventListener("keydown", dismiss, true);
+    // root 上的监听随 root 一起回收；挂在 window 上的要靠 signal 撤掉（面板重建时）
+    window.addEventListener("keydown", dismiss, { capture: true, signal });
 }

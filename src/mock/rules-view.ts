@@ -1,8 +1,9 @@
+import { tr } from "../i18n";
 import { showToast } from "../utils";
 
 import { planEditorKey, type TEditAction } from "./editor-assist";
 import { formatJson, jsonError } from "./json-repair";
-import { applyPreset, kMockPresets, resetRule, type TMockPreset, type TRuleChange } from "./presets";
+import { applyPreset, getMockPresets, resetRule, type TRuleChange } from "./presets";
 import type { TRealResponse } from "./record-seed";
 import {
     addMockRule,
@@ -32,18 +33,25 @@ export type TRulesView = {
     reveal: (ruleId: string) => void;
     /** 把键盘焦点放进视图 */
     focus: () => void;
+    /** 不再跟着规则变化重画（面板重建时调用） */
+    dispose: () => void;
 };
 
 // 下拉框里只放短名字，解释放在 title 和下方的提示里：面板默认只有 440px 宽
-const kModeOptions: readonly { value: TMockMode; label: string }[] = [
-    { value: "block", label: "Block" },
-    { value: "rewrite", label: "Pass through" },
-    { value: "hang", label: "Hang" },
-];
+function modeOptions(): readonly { value: TMockMode; label: string }[] {
+    return [
+        { value: "block", label: tr("Block", "拦截") },
+        { value: "rewrite", label: tr("Pass through", "放行") },
+        { value: "hang", label: tr("Hang", "挂起") },
+    ];
+}
 
 /** 详情和提示里用的模式名 */
 export function mockModeLabel(mode: TMockMode): string {
-    return mode === "rewrite" ? "pass-through" : mode;
+    if (mode === "rewrite") {
+        return tr("pass-through", "放行");
+    }
+    return mode === "hang" ? tr("hang", "挂起") : tr("block", "拦截");
 }
 
 /** 规则视图自己的样式；`root` 是面板根节点的选择器，所有规则都以它开头，和面板其它样式的写法一致 */
@@ -288,21 +296,30 @@ function button(className: string, text: string, title: string, onClick: () => v
 
 function hitsText(rule: TMockRule): string {
     if (rule.times > 0) {
-        return `Hits ${rule.hits} / ${rule.times}${isUsedUp(rule) ? " — spent" : ""}`;
+        return tr(
+            `Hits ${rule.hits} / ${rule.times}${isUsedUp(rule) ? " — spent" : ""}`,
+            `已命中 ${rule.hits} / ${rule.times}${isUsedUp(rule) ? "，已用完" : ""}`,
+        );
     }
-    return `Hits ${rule.hits}`;
+    return tr(`Hits ${rule.hits}`, `已命中 ${rule.hits} 次`);
 }
 
 function modeNote(mode: TMockMode): { text: string; danger: boolean } | undefined {
     if (mode === "rewrite") {
         return {
-            text: "The request is really sent and executed; only the response the page sees is replaced. Orders, payments and approvals still take effect.",
+            text: tr(
+                "The request is really sent and executed; only the response the page sees is replaced. Orders, payments and approvals still take effect.",
+                "请求会真的发到服务器并执行，页面只是看到被改过的返回。下单、支付、审批这类接口照样会真的生效。",
+            ),
             danger: true,
         };
     }
     if (mode === "hang") {
         return {
-            text: "The request is not sent and never completes: use it to check loading states and the page's own timeout. Status, body and delay are ignored.",
+            text: tr(
+                "The request is not sent and never completes: use it to check loading states and the page's own timeout. Status, body and delay are ignored.",
+                "请求不发到服务器，页面会一直等：用来看加载中的样子和前端自己的超时提示。状态码、响应体、延迟这时都不起作用。",
+            ),
             danger: false,
         };
     }
@@ -361,11 +378,11 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
     // ---- 第一行：启用 | 方法 | 地址匹配 | 删除 ----
     const enabled = el("input", "nri-check");
     enabled.type = "checkbox";
-    enabled.title = "Enable this rule";
+    enabled.title = tr("Enable this rule", "启用这条规则");
     enabled.addEventListener("change", () => update({ on: enabled.checked }));
 
     const method = el("select", "nri-field");
-    method.title = "Request method";
+    method.title = tr("Request method", "请求方法");
     for (const value of kMockMethods) {
         const option = el("option", undefined, value);
         option.value = value;
@@ -377,11 +394,15 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
     match.type = "text";
     match.spellcheck = false;
     match.autocomplete = "off";
-    match.placeholder = "Part of the URL, e.g. /api/transfers; start with re: for a regex";
-    match.setAttribute("aria-label", "URL match");
+    match.placeholder = tr(
+        "Part of the URL, e.g. /api/transfers; start with re: for a regex",
+        "URL 里包含的一段，如 /api/transfers；以 re: 开头按正则匹配",
+    );
+    match.title = match.placeholder;
+    match.setAttribute("aria-label", tr("URL match", "URL 匹配"));
     match.addEventListener("input", () => update({ match: match.value }));
 
-    const remove = button("nri-btn", "✕", "Delete this rule", () => removeMockRule(rule.id));
+    const remove = button("nri-btn", "✕", tr("Delete this rule", "删除这条规则"), () => removeMockRule(rule.id));
 
     const head = el("div", "nri-rule-row");
     head.append(enabled, method, match, remove);
@@ -400,14 +421,22 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
         });
         return field;
     }
-    const status = numberField("status", "HTTP status, 200–599; 0 = network error");
-    const delay = numberField("delay", "Wait this many milliseconds before responding");
-    const times = numberField("times", "Apply at most this many times, then let requests through; 0 = no limit");
+    const status = numberField("status", tr("HTTP status, 200–599; 0 = network error", "HTTP 状态码，200–599；0 = 网络错误"));
+    const delay = numberField("delay", tr("Wait this many milliseconds before responding", "等多少毫秒再返回"));
+    const times = numberField(
+        "times",
+        tr(
+            "Apply at most this many times, then let requests through; 0 = no limit",
+            "最多命中几次，之后放行；0 = 不限",
+        ),
+    );
 
     const mode = el("select", "nri-field");
-    mode.title =
-        "Block: not sent, the rule answers. Pass through: really sent and executed, the page sees the rule's response. Hang: not sent, never answers";
-    for (const { value, label } of kModeOptions) {
+    mode.title = tr(
+        "Block: not sent, the rule answers. Pass through: really sent and executed, the page sees the rule's response. Hang: not sent, never answers",
+        "拦截：不发到服务器，直接给规则的返回。放行：真的发出并执行，页面看到规则的返回。挂起：不发，也一直不返回",
+    );
+    for (const { value, label } of modeOptions()) {
         const option = el("option", undefined, label);
         option.value = value;
         mode.appendChild(option);
@@ -415,19 +444,21 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
     mode.addEventListener("change", () => update({ mode: mode.value as TMockMode }, true));
 
     const hits = el("span", "nri-rule-hits");
-    const resetHits = button("nri-text-btn", "Reset", "Set the hit count back to 0", () => update({ hits: 0 }));
+    const resetHits = button("nri-text-btn", tr("Reset", "清零"), tr("Set the hit count back to 0", "命中次数清零"), () =>
+        update({ hits: 0 }),
+    );
 
     // 默认面板只有 440px 宽，分两行固定排布，免得随宽度折得七零八落
     const settings = el("div", "nri-rule-row");
-    settings.append(el("span", "nri-rule-label", "Respond"), status, mode, hits, resetHits);
+    settings.append(el("span", "nri-rule-label", tr("Respond", "返回")), status, mode, hits, resetHits);
     const timing = el("div", "nri-rule-row");
     timing.append(
-        el("span", "nri-rule-label", "Delay"),
+        el("span", "nri-rule-label", tr("Delay", "延迟")),
         delay,
         el("span", "nri-rule-label", "ms"),
-        el("span", "nri-rule-label", "Max hits"),
+        el("span", "nri-rule-label", tr("Max hits", "最多命中")),
         times,
-        el("span", "nri-rule-label", "(0 = no limit)"),
+        el("span", "nri-rule-label", tr("(0 = no limit)", "次（0 = 不限）")),
     );
 
     // ---- 预设 ----
@@ -440,19 +471,18 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
         update(change.rule, true);
     }
     const presets = el("div", "nri-chips");
-    presets.append(el("span", "nri-rule-label", "Presets"));
-    for (const preset of kMockPresets) {
-        presets.append(
-            button("nri-chip", preset.label, preset.title, () =>
-                applyChange(applyPreset(rule, preset as TMockPreset)),
-            ),
-        );
+    presets.append(el("span", "nri-rule-label", tr("Presets", "预设")));
+    for (const preset of getMockPresets()) {
+        presets.append(button("nri-chip", preset.label, preset.title, () => applyChange(applyPreset(rule, preset))));
     }
     presets.append(
         button(
             "nri-chip nri-chip-end",
-            "↺ Reset",
-            "Back to the captured response: restore status and body, block mode, no delay",
+            tr("↺ Reset", "↺ 复原"),
+            tr(
+                "Back to the captured response: restore status and body, block mode, no delay",
+                "回到真实返回：状态码和响应体恢复，模式回到拦截，延迟清零",
+            ),
             () => applyChange(resetRule(rule, options.findRealResponse(rule))),
         ),
     );
@@ -460,8 +490,8 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
     // ---- 响应体编辑框 ----
     const body = el("textarea", "nri-field nri-rule-body");
     body.spellcheck = false;
-    body.placeholder = "Response body";
-    body.setAttribute("aria-label", "Response body");
+    body.placeholder = tr("Response body", "返回的响应体");
+    body.setAttribute("aria-label", tr("Response body", "响应体"));
 
     const errorLine = el("div", "nri-rule-error");
     const fixNote = el("div", "nri-rule-note");
@@ -477,8 +507,11 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
     // 少个逗号、多个引号，页面拿到后会解析失败，报出来的错很像前端 bug —— 所以改的时候就提示
     const autoFix = button(
         "nri-text-btn",
-        "Auto-fix",
-        "Add missing quotes, commas and brackets, drop stray commas, then re-indent. Can be undone",
+        tr("Auto-fix", "自动修复"),
+        tr(
+            "Add missing quotes, commas and brackets, drop stray commas, then re-indent. Can be undone",
+            "补上缺的引号、逗号、括号，去掉多余的逗号，再重新排版。可以撤销",
+        ),
         formatBody,
     );
     function checkBody(): void {
@@ -487,7 +520,13 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
         errorLine.replaceChildren(
             ...(message === ""
                 ? []
-                : [`The body is not valid JSON, so the page will fail to parse it: ${message}`, autoFix]),
+                : [
+                      tr(
+                          `The body is not valid JSON, so the page will fail to parse it: ${message}`,
+                          `响应体不是合法的 JSON，页面拿到后会解析失败：${message}`,
+                      ),
+                      autoFix,
+                  ]),
         );
         body.classList.toggle("nri-invalid", message !== "");
     }
@@ -508,16 +547,19 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
             return;
         }
         if (result.text === rule.body) {
-            showToast("info", "Already formatted", 1500);
+            showToast("info", tr("Already formatted", "已经是排好版的了"), 1500);
             return;
         }
         const previous = rule.body;
         setBody(result.text);
         fixNote.replaceChildren(
             result.fixed === undefined
-                ? "Re-indented."
-                : `Fixed ${result.fixed}. Check that the result is what you meant.`,
-            button("nri-text-btn", "Undo", "Put the body back the way it was", () => {
+                ? tr("Re-indented.", "已重新排版。")
+                : tr(
+                      `Fixed ${result.fixed}. Check that the result is what you meant.`,
+                      `已自动修复：${result.fixed}。请确认内容是你要的。`,
+                  ),
+            button("nri-text-btn", tr("Undo", "撤销"), tr("Put the body back the way it was", "恢复成修改前的样子"), () => {
                 setBody(previous);
                 fixNote.hidden = true;
             }),
@@ -546,8 +588,11 @@ function createRuleCard(initial: TMockRule, options: TRulesViewOptions): TRuleCa
 
     const format = button(
         "nri-push-btn nri-rule-format",
-        "Format",
-        "Re-indent the JSON; broken JSON (missing quotes, commas, brackets) is repaired first",
+        tr("Format", "格式化"),
+        tr(
+            "Re-indent the JSON; broken JSON (missing quotes, commas, brackets) is repaired first",
+            "把 JSON 重新排版；写坏了的（少引号、逗号、括号）会先试着修好",
+        ),
         formatBody,
     );
     const bodyWrap = el("div", "nri-rule-bodywrap");
@@ -599,7 +644,7 @@ export function createRulesView(options: TRulesViewOptions): TRulesView {
     view.hidden = true;
 
     // ---- 顶部：新建 | 全部暂停 | 清空 ----
-    const addBtn = button("nri-push-btn", "+ New Rule", "Add an empty rule", () => {
+    const addBtn = button("nri-push-btn", tr("+ New Rule", "+ 新增规则"), tr("Add an empty rule", "新增一条空规则"), () => {
         const rule = addMockRule({});
         reveal(rule.id);
         cards.get(rule.id)?.el.querySelector<HTMLInputElement>('input[type="text"]')?.focus();
@@ -609,8 +654,8 @@ export function createRulesView(options: TRulesViewOptions): TRulesView {
     pause.type = "checkbox";
     pause.addEventListener("change", () => setMockPaused(pause.checked));
     const pauseLabel = el("label");
-    pauseLabel.title = "Turn every rule off for now; the rules themselves are kept";
-    pauseLabel.append(pause, "Pause All");
+    pauseLabel.title = tr("Turn every rule off for now; the rules themselves are kept", "所有规则临时失效，规则本身保留");
+    pauseLabel.append(pause, tr("Pause All", "全部暂停"));
 
     // 清空的规则找不回来，所以要点两次：第一次只是把按钮变成红色的确认，3 秒不点就恢复原样
     let clearTimer: ReturnType<typeof setTimeout> | undefined;
@@ -619,13 +664,16 @@ export function createRulesView(options: TRulesViewOptions): TRulesView {
             clearTimeout(clearTimer);
             clearTimer = undefined;
         }
-        clearBtn.textContent = "Clear All";
+        clearBtn.textContent = tr("Clear All", "清空");
         clearBtn.classList.remove("nri-danger");
     }
-    const clearBtn = button("nri-text-btn", "Clear All", "Delete every rule", () => {
+    const clearBtn = button("nri-text-btn", tr("Clear All", "清空"), tr("Delete every rule", "删除全部规则"), () => {
         if (clearTimer === undefined) {
             const count = getMockRules().length;
-            clearBtn.textContent = `Click again to delete ${count === 1 ? "the rule" : `all ${count} rules`}`;
+            clearBtn.textContent = tr(
+                `Click again to delete ${count === 1 ? "the rule" : `all ${count} rules`}`,
+                `再点一次，删除全部 ${count} 条规则`,
+            );
             clearBtn.classList.add("nri-danger");
             clearTimer = setTimeout(disarmClear, 3000);
             return;
@@ -641,14 +689,20 @@ export function createRulesView(options: TRulesViewOptions): TRulesView {
     const hint = el(
         "div",
         "nri-rules-hint",
-        "Rule bodies are stored and shown unredacted — the page must receive the real content.",
+        tr(
+            "Rule bodies are stored and shown unredacted — the page must receive the real content.",
+            "规则里的响应体按原文保存和显示，不脱敏——页面要拿到的就是原文。",
+        ),
     );
 
     const list = el("div", "nri-rules-list");
     const empty = el(
         "div",
         "nri-rules-empty",
-        "No rules yet. Select a request and choose Mock, or add a rule by hand.",
+        tr(
+            "No rules yet. Select a request and choose Mock, or add a rule by hand.",
+            "还没有规则。在请求列表里选中一个请求点魔杖按钮，或者手动新增。",
+        ),
     );
 
     view.append(bar, hint, list);
@@ -708,10 +762,11 @@ export function createRulesView(options: TRulesViewOptions): TRulesView {
 
     list.replaceChildren(empty);
     render();
-    subscribeMock(render);
+    const unsubscribe = subscribeMock(render);
 
     return {
         el: view,
+        dispose: unsubscribe,
         reveal,
         focus: () => {
             addBtn.focus({ preventScroll: true });

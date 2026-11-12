@@ -21,6 +21,15 @@ import {
     recordForDisplay,
     statusReason,
 } from "./format";
+import {
+    getLanguage,
+    loadLanguagePreference,
+    resolveLanguage,
+    saveLanguagePreference,
+    setLanguage,
+    tr,
+    type TLanguagePreference,
+} from "./i18n";
 import { createJsonTree, findInJsonTree, revealJsonLine } from "./json-tree";
 import {
     isCommandKey,
@@ -116,6 +125,18 @@ type TBodyView = "tree" | "source";
 type TScope = "all" | "failed" | "mocked";
 /** 面板主视图：请求列表或 mock 规则 */
 type TPanelView = "requests" | "rules";
+/** 类型筛选的中文名和说明 */
+const kResourceTypeZh: Record<TResourceType, { label: string; title: string }> = {
+    json: { label: "JSON", title: "JSON" },
+    doc: { label: "文档", title: "HTML 和 XML 文档" },
+    text: { label: "文本", title: "纯文本" },
+    js: { label: "JS", title: "JavaScript" },
+    css: { label: "CSS", title: "样式表" },
+    img: { label: "图片", title: "图片" },
+    media: { label: "媒体", title: "音频和视频" },
+    font: { label: "字体", title: "字体" },
+    other: { label: "其他", title: "二进制、空响应、进行中和失败的请求" },
+};
 /** 状态色调，与列表状态码、详情状态胶囊共用 */
 type TTone = "success" | "info" | "warning" | "error";
 
@@ -1858,7 +1879,7 @@ function createTypeFilter(
     const el = document.createElement("div");
     el.className = "nri-typebar";
     el.setAttribute("role", "group");
-    el.setAttribute("aria-label", "Response type");
+    el.setAttribute("aria-label", tr("Response type", "响应类型"));
 
     const createChip = (label: string, title: string): HTMLButtonElement => {
         const chip = document.createElement("button");
@@ -1871,7 +1892,7 @@ function createTypeFilter(
         return chip;
     };
 
-    const allChip = createChip("All", "Show all response types");
+    const allChip = createChip(tr("All", "全部"), tr("Show all response types", "显示全部响应类型"));
     allChip.addEventListener("click", () => {
         onChange(new Set());
     });
@@ -1879,9 +1900,13 @@ function createTypeFilter(
     separator.className = "nri-typebar-sep";
     el.appendChild(separator);
 
-    const multiSelectHint = `${isMacPlatform() ? "⌘" : "Ctrl"}-click to select multiple`;
+    const multiSelectHint = tr(
+        `${isMacPlatform() ? "⌘" : "Ctrl"}-click to select multiple`,
+        `${isMacPlatform() ? "⌘" : "Ctrl"} + 点击可多选`,
+    );
     const chips = kResourceTypes.map((type) => {
-        const chip = createChip(type.label, type.title);
+        const zh = kResourceTypeZh[type.value];
+        const chip = createChip(tr(type.label, zh.label), tr(type.title, zh.title));
         chip.addEventListener("click", (event) => {
             if (!(event.metaKey || event.ctrlKey)) {
                 onChange(new Set([type.value]));
@@ -1947,13 +1972,13 @@ function statusLabel(record: TNetworkRequestRecord): string {
 /** 详情状态胶囊：带标准原因短语，如 `404 Not Found` */
 function statusPillLabel(record: TNetworkRequestRecord): string {
     if (record.error !== undefined) {
-        return "Error";
+        return tr("Error", "错误");
     }
     if (record.status === undefined) {
-        return "Pending";
+        return tr("Pending", "进行中");
     }
     if (record.status === 0) {
-        return "0 No Response";
+        return tr("0 No Response", "0 无响应");
     }
     const reason = statusReason(record.status);
     return reason === "" ? String(record.status) : `${record.status} ${reason}`;
@@ -2011,7 +2036,7 @@ async function copyWithToast(
         showToast("success", successMessage, 2000);
     } catch (error) {
         console.error("[NRI] copy failed:", error);
-        showToast("error", "Copy failed", 2500);
+        showToast("error", tr("Copy failed", "复制失败"), 2500);
     }
 }
 
@@ -2077,7 +2102,7 @@ function createKeyValueTable(
     sort: boolean,
 ): HTMLElement {
     if (entries.length === 0) {
-        return createEmptyHint("None");
+        return createEmptyHint(tr("None", "无"));
     }
     const rows = sort
         ? [...entries].sort((a, b) => a[0].localeCompare(b[0]))
@@ -2108,7 +2133,7 @@ function createBodyView(
 ): DocumentFragment {
     const fragment = document.createDocumentFragment();
     if (!hasBody(body)) {
-        fragment.appendChild(createEmptyHint("None"));
+        fragment.appendChild(createEmptyHint(tr("None", "无")));
         return fragment;
     }
     if (view === "tree") {
@@ -2126,7 +2151,10 @@ function createBodyView(
     if (formatted.truncated) {
         const notice = document.createElement("div");
         notice.className = "nri-truncated";
-        notice.textContent = `Truncated: ${formatted.totalChars} characters total`;
+        notice.textContent = tr(
+            `Truncated: ${formatted.totalChars} characters total`,
+            `已截断：共 ${formatted.totalChars} 个字符`,
+        );
         fragment.appendChild(notice);
     }
     return fragment;
@@ -2141,9 +2169,9 @@ function createDetailContent(
     switch (tab) {
         case "body":
             if (displayed.error !== undefined) {
-                fragment.appendChild(createEmptyHint("No response: the request failed."));
+                fragment.appendChild(createEmptyHint(tr("No response: the request failed.", "没有响应：请求失败了。")));
             } else if (displayed.status === undefined) {
-                fragment.appendChild(createEmptyHint("Waiting for response…"));
+                fragment.appendChild(createEmptyHint(tr("Waiting for response…", "等待响应…")));
             } else {
                 fragment.appendChild(
                     createBodyView(
@@ -2164,14 +2192,14 @@ function createDetailContent(
             break;
         case "request":
             fragment.append(
-                createSectionTitle("Query"),
+                createSectionTitle(tr("Query", "查询参数")),
                 createKeyValueTable(queryEntries(displayed.url), false),
-                createSectionTitle("Headers"),
+                createSectionTitle(tr("Headers", "请求头")),
                 createKeyValueTable(
                     Object.entries(displayed.requestHeaders ?? {}),
                     true,
                 ),
-                createSectionTitle("Body"),
+                createSectionTitle(tr("Body", "请求体")),
                 createBodyView(
                     displayed.requestBody,
                     displayed.requestHeaders,
@@ -2222,8 +2250,11 @@ function renderList(options: TRenderListOptions): void {
             markedRestored = true;
             const separator = document.createElement("div");
             separator.className = "nri-row-separator";
-            separator.textContent = "Before reload";
-            separator.title = "Requests captured before the page was reloaded";
+            separator.textContent = tr("Before reload", "刷新之前");
+            separator.title = tr(
+                "Requests captured before the page was reloaded",
+                "刷新页面之前抓到的请求",
+            );
             listEl.appendChild(separator);
         }
         const displayed = recordForDisplay(record, copyMode);
@@ -2266,7 +2297,10 @@ function renderList(options: TRenderListOptions): void {
             const tag = document.createElement("span");
             tag.className = "nri-row-mock";
             tag.textContent = "MOCK";
-            tag.title = `Response from a mock rule (${mockModeLabel(record.mock.mode)})`;
+            tag.title = tr(
+                `Response from a mock rule (${mockModeLabel(record.mock.mode)})`,
+                `返回来自 Mock 规则（${mockModeLabel(record.mock.mode)}）`,
+            );
             row.append(tag);
         }
         row.append(duration, time);
@@ -2313,10 +2347,22 @@ function mountWhenReady(root: HTMLElement): void {
     );
 }
 
-export function mountPanel(): void {
+export function mountPanel({
+    initialView = "requests",
+    settingsOpen = false,
+}: {
+    /** 重建面板（切换语言）时保持原来的视图 */
+    initialView?: TPanelView;
+    /** 重建后重新打开设置浮层：切换语言是在那里点的 */
+    settingsOpen?: boolean;
+} = {}): void {
     if (document.getElementById(kRootId) !== null) {
         return;
     }
+    // 面板挂在页面全局上的监听和订阅都登记在这里，重建面板前一次性撤掉
+    const lifetime = new AbortController();
+    const { signal } = lifetime;
+    const cleanups: (() => void)[] = [];
 
     ensurePanelStyle();
 
@@ -2351,7 +2397,7 @@ export function mountPanel(): void {
     const panel = document.createElement("div");
     panel.className = "nri-panel";
     panel.setAttribute("role", "dialog");
-    panel.setAttribute("aria-label", "Network Requests");
+    panel.setAttribute("aria-label", tr("Network Requests", "网络请求"));
 
     const applyPanelSize = (size: TPanelSize): void => {
         panelSize = size;
@@ -2370,7 +2416,7 @@ export function mountPanel(): void {
     const copyRecord = (record: TNetworkRequestRecord): void => {
         void copyWithToast(
             formatRecord(record, copyMode),
-            "Request and response copied",
+            tr("Request and response copied", "已复制请求和响应"),
         );
     };
     const curlOf = (record: TNetworkRequestRecord): string => {
@@ -2380,52 +2426,55 @@ export function mountPanel(): void {
     const urlOf = (record: TNetworkRequestRecord): string =>
         absoluteUrl(recordForDisplay(record, copyMode).url);
     const copyCurl = (record: TNetworkRequestRecord): void => {
-        void copyWithToast(curlOf(record), "cURL command copied");
+        void copyWithToast(curlOf(record), tr("cURL command copied", "已复制 cURL 命令"));
     };
     const copyUrl = (record: TNetworkRequestRecord): void => {
-        void copyWithToast(urlOf(record), "URL copied");
+        void copyWithToast(urlOf(record), tr("URL copied", "已复制 URL"));
     };
     const copyResponseBody = (record: TNetworkRequestRecord): void => {
         const displayed = recordForDisplay(record, copyMode);
         void copyWithToast(
             formatBodyForDisplay(displayed.responseBody, displayed.responseHeaders)
                 .text,
-            "Response body copied",
+            tr("Response body copied", "已复制响应体"),
         );
     };
     const copyAllVisible = (): void => {
         // 与面板列表保持一致：搜索/筛选后只复制当前可见的请求。
         if (visibleRecords.length === 0) {
-            showToast("info", "No requests to copy", 1500);
+            showToast("info", tr("No requests to copy", "没有可复制的请求"), 1500);
             return;
         }
         void copyWithToast(
             formatRecords(visibleRecords, copyMode),
-            `Copied ${visibleRecords.length} requests and responses`,
+            tr(
+                `Copied ${visibleRecords.length} requests and responses`,
+                `已复制 ${visibleRecords.length} 个请求和响应`,
+            ),
         );
     };
     // 多选复制：按列表顺序拼接
     const copyRecords = (records: readonly TNetworkRequestRecord[]): void => {
         void copyWithToast(
             formatRecords(records, copyMode),
-            `Copied ${records.length} requests and responses`,
+            tr(`Copied ${records.length} requests and responses`, `已复制 ${records.length} 个请求和响应`),
         );
     };
     const copyCurls = (records: readonly TNetworkRequestRecord[]): void => {
         void copyWithToast(
             records.map(curlOf).join("\n\n"),
-            `Copied ${records.length} cURL commands`,
+            tr(`Copied ${records.length} cURL commands`, `已复制 ${records.length} 条 cURL 命令`),
         );
     };
     const copyUrls = (records: readonly TNetworkRequestRecord[]): void => {
         void copyWithToast(
             records.map(urlOf).join("\n"),
-            `Copied ${records.length} URLs`,
+            tr(`Copied ${records.length} URLs`, `已复制 ${records.length} 个 URL`),
         );
     };
     const clearAll = (): void => {
         clearRecords();
-        showToast("info", "Cleared", 1500);
+        showToast("info", tr("Cleared", "已清空"), 1500);
     };
 
     // ---- 工具栏：标题 | 脱敏 | 复制全部 | 清空 | 设置 ----
@@ -2435,10 +2484,21 @@ export function mountPanel(): void {
     const title = document.createElement("div");
     title.className = "nri-title";
     const viewControl = createSegmentedControl<TPanelView>(
-        "Panel view",
+        tr("Panel view", "面板视图"),
         [
-            { value: "requests", label: "Requests", title: "Captured requests" },
-            { value: "rules", label: "Rules", title: "Mock rules for this site" },
+            {
+                value: "requests",
+                label: tr("Requests", "请求"),
+                title: tr("Requests captured on this page", "这个页面抓到的请求"),
+            },
+            {
+                value: "rules",
+                label: tr("Rules", "规则"),
+                title: tr(
+                    "Mock rules for this site: change the responses of matching requests",
+                    "这个网站的 Mock 规则：改写匹配请求的返回",
+                ),
+            },
         ],
         (next) => {
             setView(next, true);
@@ -2454,17 +2514,20 @@ export function mountPanel(): void {
     actions.className = "nri-actions";
 
     const copyModeControl = createSegmentedControl<TCopyMode>(
-        "Copy and details mode",
+        tr("Copy and details mode", "复制和详情的显示方式"),
         [
             {
                 value: "redacted",
-                label: "Redacted",
-                title: "Hide credentials in details and copies",
+                label: tr("Redacted", "脱敏"),
+                title: tr(
+                    "Hide credentials (tokens, cookies, passwords) in details and copies",
+                    "详情和复制内容里隐藏凭证（token、cookie、密码等）",
+                ),
             },
             {
                 value: "raw",
-                label: "Raw",
-                title: "Show captured values unredacted",
+                label: tr("Raw", "原文"),
+                title: tr("Show captured values unredacted", "按抓到的原样显示，不脱敏"),
             },
         ],
         (mode) => {
@@ -2476,12 +2539,18 @@ export function mountPanel(): void {
     );
     copyModeControl.setValue(copyMode);
 
-    const copyAllBtn = createIconButton("copy", "Copy all visible requests");
+    const copyAllBtn = createIconButton(
+        "copy",
+        tr(
+            "Copy all visible requests and responses as Markdown",
+            "把列表里看得到的全部请求和响应复制为 Markdown",
+        ),
+    );
     copyAllBtn.addEventListener("click", copyAllVisible);
 
     const clearBtn = createIconButton(
         "clear",
-        `Clear requests (${shortcutLabel("k")})`,
+        tr(`Clear the request list (${shortcutLabel("k")})`, `清空请求列表（${shortcutLabel("k")}）`),
     );
     clearBtn.addEventListener("click", clearAll);
 
@@ -2489,17 +2558,20 @@ export function mountPanel(): void {
     toolbarSeparator.className = "nri-toolbar-sep";
 
     // Low-frequency preferences live in the settings popover behind this button.
-    const settingsBtn = createIconButton("gear", "Settings");
+    const settingsBtn = createIconButton(
+        "gear",
+        tr("Settings: appearance, language, shortcut, updates", "设置：外观、语言、快捷键、更新"),
+    );
     settingsBtn.setAttribute("aria-haspopup", "dialog");
     settingsBtn.setAttribute("aria-expanded", "false");
 
     // 界面风格：VS Code / macOS，与明暗主题独立，跨站同步
     let palette: TPalette = loadPalette();
     const paletteControl = createSegmentedControl<TPalette>(
-        "Style",
+        tr("Style", "配色"),
         [
-            { value: "vscode", label: "VS Code", title: "VS Code colors" },
-            { value: "macos", label: "macOS", title: "macOS system colors with translucency" },
+            { value: "vscode", label: "VS Code", title: tr("VS Code colors", "VS Code 配色") },
+            { value: "macos", label: "macOS", title: tr("macOS system colors with translucency", "macOS 系统配色，半透明毛玻璃") },
         ],
         (next) => {
             applyPalette(next);
@@ -2515,11 +2587,15 @@ export function mountPanel(): void {
 
     let themePreference: TThemePreference = loadThemePreference();
     const themeControl = createSegmentedControl<TThemePreference>(
-        "Theme",
+        tr("Theme", "主题"),
         [
-            { value: "system", label: "System", title: "Follow the browser's appearance" },
-            { value: "light", label: "Light", title: "Always light" },
-            { value: "dark", label: "Dark", title: "Always dark" },
+            {
+                value: "system",
+                label: tr("System", "跟随系统"),
+                title: tr("Follow the browser's appearance", "跟随浏览器的明暗设置"),
+            },
+            { value: "light", label: tr("Light", "浅色"), title: tr("Always light", "始终浅色") },
+            { value: "dark", label: tr("Dark", "深色"), title: tr("Always dark", "始终深色") },
         ],
         (next) => {
             applyTheme(next);
@@ -2543,10 +2619,11 @@ export function mountPanel(): void {
         }
     };
     if (typeof colorSchemeMq.addEventListener === "function") {
-        colorSchemeMq.addEventListener("change", onColorSchemeChange);
+        colorSchemeMq.addEventListener("change", onColorSchemeChange, { signal });
     } else {
         // Safari < 14
         colorSchemeMq.addListener(onColorSchemeChange);
+        cleanups.push(() => colorSchemeMq.removeListener(onColorSchemeChange));
     }
 
     actions.append(
@@ -2569,34 +2646,40 @@ export function mountPanel(): void {
     const searchInput = document.createElement("input");
     searchInput.type = "search";
     searchInput.className = "nri-search-input";
-    searchInput.placeholder = `Filter URL (${shortcutLabel("f")})`;
+    searchInput.placeholder = tr(`Filter URL (${shortcutLabel("f")})`, `筛选 URL（${shortcutLabel("f")}）`);
     searchInput.spellcheck = false;
     searchInput.autocomplete = "off";
-    searchInput.setAttribute("aria-label", "Filter by URL");
+    searchInput.setAttribute("aria-label", tr("Filter by URL", "按 URL 筛选"));
 
     const searchCount = document.createElement("span");
     searchCount.className = "nri-search-count";
     searchCount.hidden = true;
 
-    const searchClear = createIconButton("xmark", "Clear filter", "nri-search-clear");
+    const searchClear = createIconButton("xmark", tr("Clear filter", "清除筛选"), "nri-search-clear");
     searchClear.tabIndex = -1;
     searchClear.hidden = true;
 
     searchField.append(searchInput, searchCount, searchClear);
 
     const scopeControl = createSegmentedControl<TScope>(
-        "Request scope",
+        tr("Request scope", "请求范围"),
         [
-            { value: "all", label: "All", title: "Show all requests" },
+            { value: "all", label: tr("All", "全部"), title: tr("Show all requests", "显示全部请求") },
             {
                 value: "failed",
-                label: "Failed",
-                title: "Show only failed requests (status 0, 4xx, 5xx, network errors)",
+                label: tr("Failed", "失败"),
+                title: tr(
+                    "Show only failed requests (status 0, 4xx, 5xx, network errors)",
+                    "只看失败的请求（状态码 0、4xx、5xx、网络错误）",
+                ),
             },
             {
                 value: "mocked",
-                label: "Mocked",
-                title: "Show only requests whose response came from a mock rule",
+                label: tr("Mocked", "已模拟"),
+                title: tr(
+                    "Show only requests whose response came from a mock rule",
+                    "只看返回被 Mock 规则改过的请求",
+                ),
             },
         ],
         (next) => {
@@ -2621,7 +2704,7 @@ export function mountPanel(): void {
     list.tabIndex = 0;
     list.setAttribute("role", "listbox");
     list.setAttribute("aria-multiselectable", "true");
-    list.setAttribute("aria-label", "Requests");
+    list.setAttribute("aria-label", tr("Requests", "请求"));
 
     // ---- 详情区：头部（状态、URL、视图切换与操作）+ 内容 ----
     const detail = document.createElement("div");
@@ -2650,10 +2733,10 @@ export function mountPanel(): void {
     durationMeta.className = "nri-summary-meta";
     const sizeMeta = document.createElement("span");
     sizeMeta.className = "nri-summary-meta";
-    sizeMeta.title = "Response body size";
+    sizeMeta.title = tr("Response body size", "响应体大小");
     const timeMeta = document.createElement("span");
     timeMeta.className = "nri-summary-meta";
-    timeMeta.title = "Started at";
+    timeMeta.title = tr("Started at", "开始时间");
     const sourceMeta = document.createElement("span");
     sourceMeta.className = "nri-summary-meta";
     summary.append(statusPill, durationMeta, sizeMeta, timeMeta, sourceMeta);
@@ -2661,7 +2744,7 @@ export function mountPanel(): void {
     // Closing the detail deselects; selecting a row opens it again
     const closeDetailBtn = createIconButton(
         "xmark",
-        "Close details (Esc)",
+        tr("Close details (Esc)", "关闭详情（Esc）"),
         "nri-close-btn",
     );
     closeDetailBtn.addEventListener("click", () => {
@@ -2691,14 +2774,18 @@ export function mountPanel(): void {
     detailBar.className = "nri-detail-bar";
 
     const tabControl = createSegmentedControl<TDetailTab>(
-        "Detail view",
+        tr("Detail view", "详情视图"),
         [
-            { value: "body", label: "Body", title: "Response body" },
-            { value: "headers", label: "Headers", title: "Response headers" },
+            { value: "body", label: tr("Body", "响应体"), title: tr("Response body", "响应体") },
+            {
+                value: "headers",
+                label: tr("Headers", "响应头"),
+                title: tr("Response headers", "响应头"),
+            },
             {
                 value: "request",
-                label: "Request",
-                title: "Request query, headers, and body",
+                label: tr("Request", "请求"),
+                title: tr("Request query, headers, and body", "请求的查询参数、请求头和请求体"),
             },
         ],
         (tab) => {
@@ -2710,10 +2797,13 @@ export function mountPanel(): void {
     const spacer = document.createElement("span");
     spacer.className = "nri-spacer";
 
-    const bodyViewBtn = createIconButton("code", "Show source");
+    const bodyViewBtn = createIconButton("code", "");
     const applyBodyView = (view: TBodyView): void => {
         bodyView = view;
-        const label = view === "tree" ? "Show source" : "Show as tree";
+        const label =
+            view === "tree"
+                ? tr("Show as formatted text instead of a tree", "改为显示格式化后的原文")
+                : tr("Show as a collapsible JSON tree", "改为显示可折叠的 JSON 树");
         bodyViewBtn.innerHTML = kIconSvg[view === "tree" ? "code" : "tree"];
         bodyViewBtn.title = label;
         bodyViewBtn.setAttribute("aria-label", label);
@@ -2734,16 +2824,25 @@ export function mountPanel(): void {
         };
     const copyRecordBtn = createIconButton(
         "copy",
-        `Copy request and response as Markdown (${shortcutLabel("c")})`,
+        tr(
+            `Copy this request and its response as Markdown (${shortcutLabel("c")})`,
+            `把这个请求和它的响应复制为 Markdown（${shortcutLabel("c")}）`,
+        ),
     );
     copyRecordBtn.addEventListener("click", withSelected(copyRecord));
-    const copyBodyBtn = createIconButton("braces", "Copy response body");
+    const copyBodyBtn = createIconButton("braces", tr("Copy the response body", "复制响应体"));
     copyBodyBtn.addEventListener("click", withSelected(copyResponseBody));
-    const copyCurlBtn = createIconButton("terminal", "Copy as cURL");
+    const copyCurlBtn = createIconButton(
+        "terminal",
+        tr("Copy as a cURL command to replay it in a terminal", "复制为 cURL 命令，可在终端里重放"),
+    );
     copyCurlBtn.addEventListener("click", withSelected(copyCurl));
-    const mockBtn = createIconButton("mock", "Mock this request");
+    const mockBtn = createIconButton("mock", "");
     mockBtn.addEventListener("click", withSelected((record) => openMock(record)));
-    const findBtn = createIconButton("search", `Find (${shortcutLabel("f")})`);
+    const findBtn = createIconButton(
+        "search",
+        tr(`Find text in the details (${shortcutLabel("f")})`, `在详情里查找文字（${shortcutLabel("f")}）`),
+    );
 
     // 查找栏：在详情区当前内容中查找，高亮全部命中，Return / ⇧Return 逐个跳转
     const findBar = document.createElement("div");
@@ -2755,17 +2854,17 @@ export function mountPanel(): void {
     const findInput = document.createElement("input");
     findInput.type = "search";
     findInput.className = "nri-search-input";
-    findInput.placeholder = "Find";
+    findInput.placeholder = tr("Find", "查找");
     findInput.spellcheck = false;
     findInput.autocomplete = "off";
-    findInput.setAttribute("aria-label", "Find in details");
+    findInput.setAttribute("aria-label", tr("Find in details", "在详情里查找"));
     const findCount = document.createElement("span");
     findCount.className = "nri-search-count";
     findCount.setAttribute("aria-live", "polite");
     findField.append(findInput, findCount);
-    const findPrevBtn = createIconButton("chevronUp", "Previous match (⇧Return)");
-    const findNextBtn = createIconButton("chevronDown", "Next match (Return)");
-    const findCloseBtn = createIconButton("xmark", "Close find (Esc)", "nri-close-btn");
+    const findPrevBtn = createIconButton("chevronUp", tr("Previous match (⇧Return)", "上一个（⇧Return）"));
+    const findNextBtn = createIconButton("chevronDown", tr("Next match (Return)", "下一个（Return）"));
+    const findCloseBtn = createIconButton("xmark", tr("Close find (Esc)", "关闭查找（Esc）"), "nri-close-btn");
     findBar.append(findField, findPrevBtn, findNextBtn, findCloseBtn);
 
     detailBar.append(
@@ -2785,7 +2884,7 @@ export function mountPanel(): void {
     // 可聚焦：点进详情后方向键/空格滚动内容，⌘C 复制选中文字
     detailContent.tabIndex = 0;
     detailContent.setAttribute("role", "region");
-    detailContent.setAttribute("aria-label", "Request details");
+    detailContent.setAttribute("aria-label", tr("Request details", "请求详情"));
 
     detail.append(detailHandles.top, detailHeader, detailContent);
 
@@ -2836,8 +2935,8 @@ export function mountPanel(): void {
             findInput.value === ""
                 ? ""
                 : total === 0
-                  ? "No matches"
-                  : `${findIndex + 1} of ${total}${more}`;
+                  ? tr("No matches", "没有匹配")
+                  : tr(`${findIndex + 1} of ${total}${more}`, `${findIndex + 1} / ${total}${more}`);
         findPrevBtn.disabled = total === 0;
         findNextBtn.disabled = total === 0;
         findBtn.setAttribute("aria-pressed", isFindOpen() ? "true" : "false");
@@ -3037,39 +3136,55 @@ export function mountPanel(): void {
         searchClear.hidden = searchQuery === "";
         searchCount.hidden = !filtering;
         searchCount.textContent = filtering
-            ? `${visibleRecords.length} of ${latestRecords.length}`
+            ? tr(
+                  `${visibleRecords.length} of ${latestRecords.length}`,
+                  `${visibleRecords.length} / ${latestRecords.length}`,
+              )
             : "";
     };
 
     const emptyListText = (): [string, string] => {
         if (latestRecords.length === 0) {
-            return ["No Requests", "Static assets are filtered"];
+            return [
+                tr("No Requests", "还没有请求"),
+                tr("Static assets are filtered", "静态资源不会记录"),
+            ];
         }
         if (searchQuery.trim() !== "") {
-            return ["No Results", `No URL matches “${searchQuery.trim()}”`];
+            return [
+                tr("No Results", "没有结果"),
+                tr(`No URL matches “${searchQuery.trim()}”`, `没有 URL 包含“${searchQuery.trim()}”`),
+            ];
         }
         if (types.size > 0) {
             const labels = kResourceTypes
                 .filter((type) => types.has(type.value))
-                .map((type) => type.label)
+                .map((type) => tr(type.label, kResourceTypeZh[type.value].label))
                 .join(", ");
             const failed = scope === "failed" ? "failed " : scope === "mocked" ? "mocked " : "";
-            return ["No Results", `No ${failed}${labels} requests`];
+            const failedZh = scope === "failed" ? "失败的" : scope === "mocked" ? "已模拟的" : "";
+            return [
+                tr("No Results", "没有结果"),
+                tr(`No ${failed}${labels} requests`, `没有${failedZh} ${labels} 请求`),
+            ];
         }
         if (scope === "mocked") {
-            return ["No Mocked Requests", "Requests answered by a mock rule show up here"];
+            return [
+                tr("No Mocked Requests", "没有被模拟的请求"),
+                tr("Requests answered by a mock rule show up here", "返回被 Mock 规则改过的请求会显示在这里"),
+            ];
         }
-        return ["No Failed Requests", "Everything succeeded so far"];
+        return [tr("No Failed Requests", "没有失败的请求"), tr("Everything succeeded so far", "目前都成功了")];
     };
 
     const listMenuItems = (): TContextMenuItem[] => [
         {
-            label: "Copy All Visible Requests",
+            label: tr("Copy All Visible Requests", "复制全部可见请求"),
             onSelect: copyAllVisible,
             disabled: visibleRecords.length === 0,
         },
         {
-            label: "Clear Requests",
+            label: tr("Clear Requests", "清空请求"),
             shortcut: shortcutLabel("k"),
             onSelect: clearAll,
             disabled: latestRecords.length === 0,
@@ -3080,16 +3195,16 @@ export function mountPanel(): void {
         records: readonly TNetworkRequestRecord[],
     ): TContextMenuItem[] => [
         {
-            label: `Copy ${records.length} Requests and Responses`,
+            label: tr(`Copy ${records.length} Requests and Responses`, `复制这 ${records.length} 个请求和响应`),
             shortcut: shortcutLabel("c"),
             onSelect: () => copyRecords(records),
         },
         {
-            label: `Copy ${records.length} as cURL`,
+            label: tr(`Copy ${records.length} as cURL`, `复制这 ${records.length} 个为 cURL`),
             onSelect: () => copyCurls(records),
         },
         {
-            label: `Copy ${records.length} URLs`,
+            label: tr(`Copy ${records.length} URLs`, `复制这 ${records.length} 个 URL`),
             onSelect: () => copyUrls(records),
         },
         "separator",
@@ -3100,20 +3215,20 @@ export function mountPanel(): void {
         {
             label:
                 findCoveringRule(record.method, record.url) === undefined
-                    ? "Mock This Request"
-                    : "Edit Mock Rule",
+                    ? tr("Mock This Request", "Mock 这个请求")
+                    : tr("Edit Mock Rule", "编辑 Mock 规则"),
             onSelect: () => openMock(record),
         },
         "separator",
         {
-            label: "Copy Request and Response",
+            label: tr("Copy Request and Response", "复制请求和响应"),
             shortcut: shortcutLabel("c"),
             onSelect: () => copyRecord(record),
         },
-        { label: "Copy as cURL", onSelect: () => copyCurl(record) },
-        { label: "Copy URL", onSelect: () => copyUrl(record) },
+        { label: tr("Copy as cURL", "复制为 cURL"), onSelect: () => copyCurl(record) },
+        { label: tr("Copy URL", "复制 URL"), onSelect: () => copyUrl(record) },
         {
-            label: "Copy Response Body",
+            label: tr("Copy Response Body", "复制响应体"),
             disabled: !hasBody(record.responseBody),
             onSelect: () => copyResponseBody(record),
         },
@@ -3217,7 +3332,7 @@ export function mountPanel(): void {
     const settings = document.createElement("div");
     settings.className = "nri-settings";
     settings.setAttribute("role", "dialog");
-    settings.setAttribute("aria-label", "Settings");
+    settings.setAttribute("aria-label", tr("Settings", "设置"));
     settings.tabIndex = -1;
     settings.hidden = true;
 
@@ -3257,7 +3372,7 @@ export function mountPanel(): void {
     const resetShortcutBtn = document.createElement("button");
     resetShortcutBtn.type = "button";
     resetShortcutBtn.className = "nri-text-btn";
-    resetShortcutBtn.textContent = "Reset";
+    resetShortcutBtn.textContent = tr("Reset", "恢复默认");
     keepFocusOnPress(resetShortcutBtn);
 
     const shortcutHint = document.createElement("div");
@@ -3265,28 +3380,34 @@ export function mountPanel(): void {
 
     const shortcutText = (): string =>
         toggleShortcut === null
-            ? "None"
+            ? tr("None", "无")
             : formatShortcut(toggleShortcut, isMacPlatform());
 
     const renderShortcut = (): void => {
         keycap.setAttribute("aria-pressed", recordingShortcut ? "true" : "false");
         keycap.dataset.empty = toggleShortcut === null ? "true" : "false";
-        keycap.textContent = recordingShortcut ? "Press keys…" : shortcutText();
+        keycap.textContent = recordingShortcut ? tr("Press keys…", "请按键…") : shortcutText();
         const label = recordingShortcut
-            ? "Recording shortcut"
-            : `Show/Hide panel shortcut: ${shortcutText()}. Click to change`;
+            ? tr("Recording shortcut", "正在录制快捷键")
+            : tr(
+                  `Show/Hide panel shortcut: ${shortcutText()}. Click to change`,
+                  `显示 / 隐藏面板的快捷键：${shortcutText()}。点击修改`,
+              );
         keycap.title = label;
         keycap.setAttribute("aria-label", label);
         resetShortcutBtn.hidden =
             recordingShortcut ||
             isSameShortcut(toggleShortcut, kDefaultToggleShortcut);
-        resetShortcutBtn.title = `Reset to ${formatShortcut(kDefaultToggleShortcut, isMacPlatform())}`;
+        resetShortcutBtn.title = tr(
+            `Reset to ${formatShortcut(kDefaultToggleShortcut, isMacPlatform())}`,
+            `恢复为 ${formatShortcut(kDefaultToggleShortcut, isMacPlatform())}`,
+        );
         shortcutHint.textContent = recordingShortcut
-            ? "Esc cancels · Delete disables"
+            ? tr("Esc cancels · Delete disables", "Esc 取消 · Delete 停用")
             : toggleShortcut === null
-              ? "Click to set a shortcut"
+              ? tr("Click to set a shortcut", "点击设置快捷键")
               : isPlainShortcut(toggleShortcut)
-                ? "Ignored while typing"
+                ? tr("Ignored while typing", "在输入框里打字时不生效")
                 : "";
     };
 
@@ -3332,7 +3453,7 @@ export function mountPanel(): void {
         if (plain && (event.key === "Backspace" || event.key === "Delete")) {
             recordingShortcut = false;
             setToggleShortcut(null);
-            showToast("info", "Show/Hide shortcut disabled", 1800);
+            showToast("info", tr("Show/Hide shortcut disabled", "已停用显示 / 隐藏快捷键"), 1800);
             return;
         }
         const next = shortcutFromEvent(event);
@@ -3343,18 +3464,29 @@ export function mountPanel(): void {
         if (conflict !== undefined) {
             showToast(
                 "warning",
-                `${formatShortcut(next, isMacPlatform())} is ${conflict}`,
+                tr(
+                    `${formatShortcut(next, isMacPlatform())} is ${conflict}`,
+                    `${formatShortcut(next, isMacPlatform())} ${conflict === "used to navigate the panel" ? "用于在面板里移动" : "已被面板或编辑操作占用"}`,
+                ),
                 2200,
             );
             return;
         }
         recordingShortcut = false;
         setToggleShortcut(next);
-        showToast("success", `Show/Hide shortcut set to ${shortcutText()}`, 1800);
+        showToast(
+            "success",
+            tr(`Show/Hide shortcut set to ${shortcutText()}`, `显示 / 隐藏快捷键已设为 ${shortcutText()}`),
+            1800,
+        );
     });
     resetShortcutBtn.addEventListener("click", () => {
         setToggleShortcut(kDefaultToggleShortcut);
-        showToast("success", `Show/Hide shortcut set to ${shortcutText()}`, 1800);
+        showToast(
+            "success",
+            tr(`Show/Hide shortcut set to ${shortcutText()}`, `显示 / 隐藏快捷键已设为 ${shortcutText()}`),
+            1800,
+        );
     });
 
     renderShortcut();
@@ -3372,15 +3504,18 @@ export function mountPanel(): void {
     const whatsNewBtn = document.createElement("button");
     whatsNewBtn.type = "button";
     whatsNewBtn.className = "nri-text-btn";
-    whatsNewBtn.textContent = "What's New";
-    whatsNewBtn.title = "Show the release notes of every version up to this one";
+    whatsNewBtn.textContent = tr("What's New", "更新说明");
+    whatsNewBtn.title = tr(
+        "Show the release notes of every version up to this one",
+        "查看到当前版本为止每个版本的更新说明",
+    );
     keepFocusOnPress(whatsNewBtn);
 
     const betaSwitch = document.createElement("button");
     betaSwitch.type = "button";
     betaSwitch.className = "nri-switch";
     betaSwitch.setAttribute("role", "switch");
-    betaSwitch.setAttribute("aria-label", "Include beta versions");
+    betaSwitch.setAttribute("aria-label", tr("Include beta versions", "接收测试版"));
     keepFocusOnPress(betaSwitch);
 
     const checkUpdateBtn = document.createElement("button");
@@ -3397,28 +3532,54 @@ export function mountPanel(): void {
     installLink.target = "_blank";
     installLink.rel = "noopener noreferrer";
 
-    const betaRow = createSettingsRow("Beta Versions", betaSwitch);
-    betaRow.title = "Also offer beta versions; while on, checks once a day";
+    const betaRow = createSettingsRow(tr("Beta Versions", "测试版"), betaSwitch);
+    betaRow.title = tr(
+        "Also offer beta versions; while on, checks once a day",
+        "同时提示测试版；打开后每天自动检查一次",
+    );
     const checkRow = document.createElement("div");
     checkRow.className = "nri-settings-row";
     checkRow.append(checkUpdateBtn, updateStatus, installLink);
     betaRow.hidden = buildInfo.update === undefined;
     checkRow.hidden = buildInfo.update === undefined;
 
+    // 语言：界面文案在创建时就定了，所以切换后把面板拆掉重建，设置浮层重新打开在原处
+    const languagePreference = loadLanguagePreference();
+    const languageControl = createSegmentedControl<TLanguagePreference>(
+        tr("Language", "语言"),
+        [
+            { value: "auto", label: tr("Auto", "自动"), title: tr("Follow the browser's language", "跟随浏览器语言") },
+            { value: "en", label: "English", title: "English" },
+            { value: "zh", label: "中文", title: "简体中文" },
+        ],
+        (next) => {
+            saveLanguagePreference(next);
+            const language = resolveLanguage(next);
+            languageControl.setValue(next);
+            if (language === getLanguage()) {
+                return;
+            }
+            setLanguage(language);
+            remount({ view, settingsOpen: true });
+        },
+    );
+    languageControl.setValue(languagePreference);
+
     settings.append(
         createSettingsSection(
-            "Appearance",
-            createSettingsRow("Style", paletteControl.el),
-            createSettingsRow("Theme", themeControl.el),
+            tr("Appearance", "外观"),
+            createSettingsRow(tr("Style", "配色"), paletteControl.el),
+            createSettingsRow(tr("Theme", "主题"), themeControl.el),
+            createSettingsRow(tr("Language", "语言"), languageControl.el),
         ),
         createSettingsSection(
-            "Keyboard",
-            createSettingsRow("Show/Hide Panel", resetShortcutBtn, keycap),
+            tr("Keyboard", "键盘"),
+            createSettingsRow(tr("Show/Hide Panel", "显示 / 隐藏面板"), resetShortcutBtn, keycap),
             shortcutHint,
         ),
         createSettingsSection(
-            "Updates",
-            createSettingsRow("Version", whatsNewBtn, versionValue),
+            tr("Updates", "更新"),
+            createSettingsRow(tr("Version", "版本"), whatsNewBtn, versionValue),
             betaRow,
             checkRow,
         ),
@@ -3432,7 +3593,7 @@ export function mountPanel(): void {
         window.clearTimeout(updateResetTimer);
         checkUpdateBtn.disabled = view.status === "checking";
         checkUpdateBtn.textContent =
-            view.status === "checking" ? "Checking…" : "Check for Updates";
+            view.status === "checking" ? tr("Checking…", "正在检查…") : tr("Check for Updates", "检查更新");
         installLink.hidden = view.status !== "available";
         updateStatus.hidden = view.status === "available";
         // The gear carries a dot while a newer version waits to be installed.
@@ -3441,13 +3602,18 @@ export function mountPanel(): void {
 
         if (view.status === "available") {
             // The link names the version, so no separate status is needed.
-            installLink.textContent = `Install v${view.version}`;
-            installLink.title = `Install v${view.version} with Tampermonkey`;
+            installLink.textContent = tr(`Install v${view.version}`, `安装 v${view.version}`);
+            installLink.title = tr(
+                `Install v${view.version} with Tampermonkey`,
+                `用 Tampermonkey 安装 v${view.version}`,
+            );
             return;
         }
         if (view.status === "up-to-date" || view.status === "failed") {
             updateStatus.textContent =
-                view.status === "up-to-date" ? "Up to date" : "Update check failed";
+                view.status === "up-to-date"
+                    ? tr("Up to date", "已是最新版本")
+                    : tr("Update check failed", "检查更新失败");
             updateResetTimer = window.setTimeout(
                 () => renderUpdate({ status: "idle" }),
                 view.status === "up-to-date" ? 3000 : 5000,
@@ -3485,7 +3651,14 @@ export function mountPanel(): void {
             if (result.status === "available") {
                 installLink.href = channel.installUrl;
                 if (background) {
-                    showToast("info", `Network Request Inspector v${result.version} is available`, 4000);
+                    showToast(
+                        "info",
+                        tr(
+                            `Network Request Inspector v${result.version} is available`,
+                            `有新版本 v${result.version} 可以安装`,
+                        ),
+                        4000,
+                    );
                 }
             }
             if (!background || result.status === "available") {
@@ -3566,8 +3739,14 @@ export function mountPanel(): void {
             showToast(
                 "success",
                 rule.orig === undefined
-                    ? "Rule created with a default 500 response (no captured response to copy)"
-                    : "Rule created from the captured response; edit it below",
+                    ? tr(
+                          "Rule created with a default 500 response (no captured response to copy)",
+                          "已建规则，使用默认的 500 返回（没有抓到可带入的真实返回）",
+                      )
+                    : tr(
+                          "Rule created from the captured response; edit it below",
+                          "已按抓到的真实返回建好规则，在下面修改",
+                      ),
                 2500,
             );
         }
@@ -3582,27 +3761,43 @@ export function mountPanel(): void {
         }
         let text: string;
         if (mock.mode === "block") {
-            text = "Answered by a mock rule — the request never reached the server.";
+            text = tr(
+                "Answered by a mock rule — the request never reached the server.",
+                "返回来自 Mock 规则，请求没有发到服务器。",
+            );
         } else if (mock.mode === "hang") {
-            text = "Held by a mock rule — the request was not sent and never completes.";
+            text = tr(
+                "Held by a mock rule — the request was not sent and never completes.",
+                "被 Mock 规则挂起：请求没有发出，也不会返回。",
+            );
         } else if (mock.real === undefined) {
-            text = "Response replaced by a mock rule (pass-through) — waiting for the server.";
+            text = tr(
+                "Response replaced by a mock rule (pass-through) — waiting for the server.",
+                "返回被 Mock 规则替换（放行），正在等服务器响应。",
+            );
         } else if (mock.real.error !== undefined) {
-            text = `Response replaced by a mock rule (pass-through). The real request failed: ${mock.real.error}.`;
+            text = tr(
+                `Response replaced by a mock rule (pass-through). The real request failed: ${mock.real.error}.`,
+                `返回被 Mock 规则替换（放行）。真实请求失败了：${mock.real.error}。`,
+            );
         } else {
-            text = `Response replaced by a mock rule (pass-through). The server really answered ${statusPillLabel({ ...record, error: undefined, status: mock.real.status })}.`;
+            const realStatus = statusPillLabel({ ...record, error: undefined, status: mock.real.status });
+            text = tr(
+                `Response replaced by a mock rule (pass-through). The server really answered ${realStatus}.`,
+                `返回被 Mock 规则替换（放行）。服务器真实返回的是 ${realStatus}。`,
+            );
         }
         const edit = document.createElement("button");
         edit.type = "button";
         edit.className = "nri-text-btn";
-        edit.textContent = "Show rule";
+        edit.textContent = tr("Show rule", "查看规则");
         edit.addEventListener("click", () => {
             const exists = getMockRules().some((rule) => rule.id === mock.ruleId);
             setView("rules", false);
             if (exists) {
                 rulesView.reveal(mock.ruleId);
             } else {
-                showToast("info", "That rule has been deleted", 2000);
+                showToast("info", tr("That rule has been deleted", "这条规则已经删除了"), 2000);
             }
         });
         mockLine.replaceChildren(text, edit);
@@ -3611,7 +3806,15 @@ export function mountPanel(): void {
     function updateMockBtn(): void {
         const record = selectedRecord();
         const has = record !== undefined && findCoveringRule(record.method, record.url) !== undefined;
-        const label = has ? "Edit the mock rule for this request" : "Mock this request";
+        const label = has
+            ? tr(
+                  "Edit the mock rule for this request (it is already mocked)",
+                  "编辑这个请求的 Mock 规则（已经有规则了）",
+              )
+            : tr(
+                  "Mock this request: create a rule from its real response, then change the status or body",
+                  "Mock 这个请求：按它的真实返回建一条规则，再改状态码或响应体",
+              );
         mockBtn.title = label;
         mockBtn.setAttribute("aria-label", label);
         mockBtn.classList.toggle("nri-mock-has", has);
@@ -3620,14 +3823,14 @@ export function mountPanel(): void {
     const whatsNew = document.createElement("div");
     whatsNew.className = "nri-whats-new";
     whatsNew.setAttribute("role", "region");
-    whatsNew.setAttribute("aria-label", "What's New");
+    whatsNew.setAttribute("aria-label", tr("What's New", "更新说明"));
     whatsNew.hidden = true;
 
     const whatsNewHeader = document.createElement("div");
     whatsNewHeader.className = "nri-whats-new-header";
     const whatsNewTitle = document.createElement("h3");
     whatsNewTitle.className = "nri-whats-new-title";
-    whatsNewTitle.textContent = "What's New";
+    whatsNewTitle.textContent = tr("What's New", "更新说明");
     const whatsNewSubtitle = document.createElement("p");
     whatsNewSubtitle.className = "nri-whats-new-subtitle";
     whatsNewHeader.append(whatsNewTitle, whatsNewSubtitle);
@@ -3640,7 +3843,7 @@ export function mountPanel(): void {
     const whatsNewDone = document.createElement("button");
     whatsNewDone.type = "button";
     whatsNewDone.className = "nri-push-btn nri-primary";
-    whatsNewDone.textContent = "Done";
+    whatsNewDone.textContent = tr("Done", "完成");
     const whatsNewActions = document.createElement("div");
     whatsNewActions.className = "nri-whats-new-actions";
     whatsNewActions.append(whatsNewDone);
@@ -3705,7 +3908,10 @@ export function mountPanel(): void {
         whatsNewSubtitle.textContent =
             from === undefined
                 ? `Network Request Inspector ${getVersionLabel()}`
-                : `Updated from v${from} to ${getVersionLabel()}`;
+                : tr(
+                      `Updated from v${from} to ${getVersionLabel()}`,
+                      `已从 v${from} 更新到 ${getVersionLabel()}`,
+                  );
         whatsNewNotes.replaceChildren(...entries.map(renderChangelogEntry));
         whatsNewNotes.scrollTop = 0;
         whatsNew.hidden = false;
@@ -3866,10 +4072,12 @@ export function mountPanel(): void {
             return "";
         }
         if (isMockPaused()) {
-            return `Mock rules: ${rules.length} (paused)`;
+            return tr(`Mock rules: ${rules.length} (paused)`, `Mock 规则：${rules.length} 条（已暂停）`);
         }
         const active = countActiveRules(rules, false);
-        return active > 0 ? `Mock rules: ${active} active` : `Mock rules: ${rules.length} (none active)`;
+        return active > 0
+            ? tr(`Mock rules: ${active} active`, `Mock 规则：${active} 条生效中`)
+            : tr(`Mock rules: ${rules.length} (none active)`, `Mock 规则：${rules.length} 条（都没生效）`);
     };
 
     const updateMockChrome = (): void => {
@@ -3877,7 +4085,7 @@ export function mountPanel(): void {
         const paused = isMockPaused() && rules.length > 0;
         const active = countActiveRules(rules, isMockPaused());
         mockBadge.hidden = active === 0 && !paused;
-        mockBadge.textContent = paused ? "Paused" : `Mock ${active}`;
+        mockBadge.textContent = paused ? tr("Paused", "已暂停") : `Mock ${active}`;
         mockBadge.classList.toggle("nri-paused", paused);
         toggle.classList.toggle("nri-mock-live", active > 0);
         viewCount.textContent = String(rules.length);
@@ -3891,9 +4099,12 @@ export function mountPanel(): void {
         const failed = latestRecords.filter(isFailedRecord).length;
         const count =
             failed > 0
-                ? `Network Requests: ${latestRecords.length} (${failed} failed)`
-                : `Network Requests: ${latestRecords.length}`;
-        const action = collapsed ? "Show Panel" : "Hide Panel";
+                ? tr(
+                      `Network Requests: ${latestRecords.length} (${failed} failed)`,
+                      `网络请求：${latestRecords.length} 个（${failed} 个失败）`,
+                  )
+                : tr(`Network Requests: ${latestRecords.length}`, `网络请求：${latestRecords.length} 个`);
+        const action = collapsed ? tr("Show Panel", "显示面板") : tr("Hide Panel", "隐藏面板");
         const shortcut = toggleShortcut === null ? "" : ` (${shortcutText()})`;
         const mock = mockSummary();
         toggle.title = `${action}${shortcut}\n${count}${mock === "" ? "" : `\n${mock}`}`;
@@ -3973,7 +4184,7 @@ export function mountPanel(): void {
             event.stopPropagation();
             setCollapsed(!collapsed);
         },
-        true,
+        { capture: true, signal },
     );
 
     const moveListSelection = (move: TListMove, extend = false): void => {
@@ -4128,7 +4339,7 @@ export function mountPanel(): void {
     );
 
     root.append(panel, dock, settings);
-    installTooltips(root);
+    installTooltips(root, signal);
     applyCollapsed();
     mountWhenReady(root);
     if (!collapsed) {
@@ -4139,26 +4350,52 @@ export function mountPanel(): void {
     applyPanelBottom(loadPanelBottom(measureToggleHeight()));
 
     // 视口变化时重新夹紧，避免持久化尺寸/位置超出小屏
-    window.addEventListener("resize", () => {
-        applyPanelSize(clampPanelSize(panelSize));
-        applyPanelBottom(
-            clampPanelBottom(panelBottom, measureToggleHeight()),
-        );
-        applyDetailHeight(clampDetailHeight(detailHeight));
-    });
+    window.addEventListener(
+        "resize",
+        () => {
+            applyPanelSize(clampPanelSize(panelSize));
+            applyPanelBottom(clampPanelBottom(panelBottom, measureToggleHeight()));
+            applyDetailHeight(clampDetailHeight(detailHeight));
+        },
+        { signal },
+    );
 
     updateMockChrome();
-    subscribeMock(() => {
-        updateMockChrome();
-        updateMockBtn();
-    });
+    cleanups.push(
+        subscribeMock(() => {
+            updateMockChrome();
+            updateMockBtn();
+        }),
+        rulesView.dispose,
+    );
 
-    subscribe((records) => {
-        latestRecords = records;
-        const failed = records.filter(isFailedRecord).length;
-        badge.textContent = String(records.length);
-        badge.classList.toggle("nri-badge-alert", failed > 0);
-        updateToggleLabel();
-        refreshList();
-    });
+    if (initialView === "rules") {
+        setView("rules", false);
+    }
+    if (settingsOpen && !collapsed) {
+        openSettings();
+    }
+
+    cleanups.push(
+        subscribe((records) => {
+            latestRecords = records;
+            const failed = records.filter(isFailedRecord).length;
+            badge.textContent = String(records.length);
+            badge.classList.toggle("nri-badge-alert", failed > 0);
+            updateToggleLabel();
+            refreshList();
+        }),
+    );
+
+    /** 拆掉这个面板再按当前语言重新挂一个。请求记录和规则都在各自的模块里，不受影响 */
+    function remount(next: { view: TPanelView; settingsOpen: boolean }): void {
+        closeContextMenu();
+        closeSettings(false);
+        lifetime.abort();
+        for (const cleanup of cleanups) {
+            cleanup();
+        }
+        root.remove();
+        mountPanel({ initialView: next.view, settingsOpen: next.settingsOpen });
+    }
 }
