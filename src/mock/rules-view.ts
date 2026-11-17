@@ -1,6 +1,7 @@
 import { tr } from "../i18n";
+import { createJsonTree, findInJsonTree, revealJsonLine, type TJsonLineMatch } from "../json-tree";
 import { shortcutLabel } from "../list-navigation";
-import { createFindPattern, matchSpans, scrollRangeIntoView } from "../text-find";
+import { createFindPattern, findTextRanges, matchSpans, scrollRangeIntoView } from "../text-find";
 import { showToast } from "../utils";
 
 import { planEditorKey, type TEditAction } from "./editor-assist";
@@ -301,6 +302,19 @@ export function rulesViewStyle(root: string): string {
         ${R} .nri-rule-bodyhead .nri-rule-find-btn {
             margin-left: auto;
         }
+        /* 树视图：和编辑框同样的框，内容是详情区那棵可折叠的 JSON 树（只读） */
+        ${R} .nri-rule-treebox {
+            min-height: 44px;
+            padding: 6px 8px;
+            overflow: auto;
+            resize: vertical;
+            border-radius: 6px;
+            background: var(--nri-window);
+            box-shadow: inset 0 0 0 1px var(--nri-separator);
+            outline: none;
+            user-select: text;
+            scrollbar-color: var(--nri-scrollbar-thumb) transparent;
+        }
         ${R} .nri-rule-findbar {
             margin: 0 0 4px;
         }
@@ -452,6 +466,12 @@ const kChevronUpSvg =
 const kChevronDownSvg =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9.5 6 6 6-6"/></svg>';
 
+// 和详情区「树 / 原文」切换按钮同样的两个图标
+const kTreeSvg =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h7"/><path d="M8 12h12"/><path d="M8 19h12"/><path d="M6 5v14"/><path d="M6 12h2"/><path d="M6 19h2"/></svg>';
+const kCodeSvg =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 7-5 5 5 5"/><path d="m16 7 5 5-5 5"/><path d="m13.5 4-3 16"/></svg>';
+
 const kXmarkSvg =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 6 12 12"/><path d="M18 6 6 18"/></svg>';
 
@@ -534,6 +554,19 @@ const kHighlightLimit = 200_000;
 
 /** 查找最多标出这么多处，和详情区一致 */
 const kMaxFindMatches = 1000;
+
+/** 树视图里查找时跳过的元素：按钮、图标、折叠后的摘要，和详情区一致 */
+const kTreeFindSkip = "button, svg, .nri-json-tail";
+
+/** 响应体能显示成树时返回解析出的对象或数组 */
+function parseForTree(text: string): object | undefined {
+    try {
+        const parsed: unknown = JSON.parse(text);
+        return typeof parsed === "object" && parsed !== null ? parsed : undefined;
+    } catch {
+        return;
+    }
+}
 
 const highlightRegistry = typeof CSS !== "undefined" && "highlights" in CSS ? CSS.highlights : undefined;
 
@@ -806,7 +839,7 @@ function createRuleCard(
         // 末尾补一个换行：最后一行是空行时，着色层也要有这一行的高度
         highlight.innerHTML = plain ? "" : `${highlightJson(painted)}\n`;
         syncScroll();
-        if (!findBar.hidden) {
+        if (!findBar.hidden && bodyView === "source") {
             runFind(true);
         }
     }
@@ -952,11 +985,87 @@ function createRuleCard(
     );
     findBar.append(findField, findPrev, findNext, findClose);
 
+    // ---- 树 / 原文切换：和详情区的 </> 按钮一样；树是只读的，改内容要切回原文 ----
+    let bodyView: "source" | "tree" = "source";
+    const treeBox = el("div", "nri-rule-treebox");
+    treeBox.hidden = true;
+    // 可聚焦：点进去以后方向键、空格能滚动，⌘F 也知道是哪条规则
+    treeBox.tabIndex = 0;
+    treeBox.setAttribute("role", "region");
+    treeBox.setAttribute("aria-label", tr("Response body as a JSON tree", "响应体的 JSON 树"));
+    let treeRoot: HTMLElement | undefined;
+    let treeOf: string | undefined;
+
+    /** 按当前响应体画树；不是 JSON 对象或数组时画不了，返回 false */
+    function renderTree(): boolean {
+        if (treeRoot !== undefined && treeOf === rule.body) {
+            return true;
+        }
+        const parsed = parseForTree(rule.body);
+        if (parsed === undefined) {
+            return false;
+        }
+        treeRoot = createJsonTree(parsed);
+        treeOf = rule.body;
+        treeBox.replaceChildren(treeRoot);
+        return true;
+    }
+
+    const viewBtn = iconButton("nri-btn", kTreeSvg, "", () => {
+        setBodyView(bodyView === "tree" ? "source" : "tree", true);
+    });
+    function paintViewBtn(): void {
+        // 图标和提示说的是「点了会变成什么」，和详情区一致
+        const label =
+            bodyView === "tree"
+                ? tr("Show as editable text instead of a tree", "改为显示可编辑的原文")
+                : tr("Show as a collapsible JSON tree (read-only)", "改为显示可折叠的 JSON 树（只读）");
+        viewBtn.innerHTML = bodyView === "tree" ? kCodeSvg : kTreeSvg;
+        viewBtn.title = label;
+        viewBtn.setAttribute("aria-label", label);
+        viewBtn.setAttribute("aria-pressed", bodyView === "tree" ? "true" : "false");
+    }
+
+    function setBodyView(next: "source" | "tree", explain: boolean): void {
+        if (next === "tree" && !renderTree()) {
+            if (explain) {
+                showToast(
+                    "info",
+                    tr(
+                        "The body is not a JSON object or array, so it cannot be shown as a tree.",
+                        "响应体不是 JSON 对象或数组，没法显示成树。",
+                    ),
+                    3000,
+                );
+            }
+            next = "source";
+        }
+        if (next === "tree" && bodyView === "source") {
+            // 树和编辑框一样高，切换时下面的内容不跳
+            treeBox.style.height = `${Math.max(44, body.offsetHeight)}px`;
+        }
+        bodyView = next;
+        editor.hidden = next === "tree";
+        treeBox.hidden = next !== "tree";
+        paintViewBtn();
+        if (!findBar.hidden) {
+            runFind(false);
+        }
+    }
+
+    // ---- 查找：原文视图按文字偏移找，树视图按 JSON 的行找（命中在折叠的节点里时先展开） ----
+    let findPattern: RegExp | undefined;
     let findSpans: [number, number][] = [];
+    let treeMatches: TJsonLineMatch[] = [];
+    let findActive: Range | undefined;
     let findIndex = 0;
 
+    function findTotal(): number {
+        return bodyView === "tree" ? treeMatches.length : findSpans.length;
+    }
+
     function updateFindChrome(): void {
-        const total = findSpans.length;
+        const total = findTotal();
         const more = total >= kMaxFindMatches ? "+" : "";
         findCount.textContent =
             findInput.value === ""
@@ -969,47 +1078,72 @@ function createRuleCard(
         findBtn.setAttribute("aria-pressed", findBar.hidden ? "false" : "true");
     }
 
-    /** 在着色层上标出全部命中和当前这一处；返回当前这一处的 Range（太长不着色时没有） */
+    /** 标出全部命中和当前这一处；返回当前这一处的 Range（原文太长不着色时没有） */
     function paintFind(): Range | undefined {
         if (highlightRegistry === undefined) {
-            return;
+            return findActive;
         }
-        if (findBar.hidden || findSpans.length === 0 || editor.classList.contains("nri-plain")) {
+        const pattern = findPattern;
+        const plain = bodyView === "source" && editor.classList.contains("nri-plain");
+        if (findBar.hidden || pattern === undefined || findTotal() === 0 || plain) {
             highlightRegistry.delete("nri-rule-find");
             highlightRegistry.delete("nri-rule-find-current");
-            return;
+            return bodyView === "tree" ? findActive : undefined;
         }
-        const ranges = rangesForSpans(highlight, findSpans);
-        highlightRegistry.set("nri-rule-find", new Highlight(...ranges));
-        const currentRange = ranges.at(findIndex);
-        const current = new Highlight(...(currentRange === undefined ? [] : [currentRange]));
+        let all: Range[];
+        if (bodyView === "tree") {
+            // 只标已经展开、看得见的行；展开节点时由下面的 MutationObserver 重标
+            all = treeRoot === undefined ? [] : findTextRanges(treeRoot, pattern, kTreeFindSkip, kMaxFindMatches);
+        } else {
+            all = rangesForSpans(highlight, findSpans);
+            findActive = all.at(findIndex);
+        }
+        highlightRegistry.set("nri-rule-find", new Highlight(...all));
+        const current = new Highlight(...(findActive === undefined ? [] : [findActive]));
         current.priority = 1;
         highlightRegistry.set("nri-rule-find-current", current);
-        return currentRange;
+        return findActive;
     }
+    new MutationObserver(() => {
+        if (!findBar.hidden && bodyView === "tree") {
+            paintFind();
+        }
+    }).observe(treeBox, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden"] });
 
-    /** 跳到第 index 处（首尾相接），需要时把它滚进编辑框和规则列表的可见范围 */
+    /** 跳到第 index 处（首尾相接），需要时把它滚进响应体和规则列表的可见范围 */
     function showMatch(index: number, scroll: boolean): void {
-        const total = findSpans.length;
+        const total = findTotal();
         findIndex = total === 0 ? 0 : (index + total) % total;
+        if (bodyView === "tree") {
+            const match = treeMatches.at(findIndex);
+            const line = match === undefined || treeRoot === undefined ? undefined : revealJsonLine(treeRoot, match);
+            findActive =
+                line === undefined || findPattern === undefined || match === undefined
+                    ? undefined
+                    : findTextRanges(line, findPattern, kTreeFindSkip).at(match.occurrence);
+        }
         const range = paintFind();
-        const span = findSpans.at(findIndex);
-        if (scroll && span !== undefined) {
-            if (range !== undefined) {
+        if (scroll && total > 0) {
+            if (bodyView === "tree") {
+                if (range !== undefined) {
+                    scrollRangeIntoView(treeBox, range);
+                }
+            } else if (range !== undefined) {
                 scrollRangeIntoView(body, range);
                 // 着色层平时靠 scroll 事件跟随，这里要马上对齐，下面才能按它的位置滚列表
                 syncScroll();
             } else {
                 // 太长没着色时没有 Range，按行号估算
-                const line = body.value.slice(0, span[0]).split("\n").length - 1;
-                body.scrollTop = Math.max(0, line * 16.5 - body.clientHeight / 2);
+                const offset = findSpans.at(findIndex)?.[0] ?? 0;
+                const lineNo = body.value.slice(0, offset).split("\n").length - 1;
+                body.scrollTop = Math.max(0, lineNo * 16.5 - body.clientHeight / 2);
             }
             const list = card.closest<HTMLElement>(".nri-rules-list");
             if (list !== null) {
                 let target = range;
                 if (target === undefined) {
                     target = document.createRange();
-                    target.selectNode(editor);
+                    target.selectNode(bodyView === "tree" ? treeBox : editor);
                 }
                 scrollRangeIntoView(list, target);
             }
@@ -1019,16 +1153,36 @@ function createRuleCard(
 
     /** 按当前的查找词重新查；`keep` 时留在当前这一处、不滚动（内容变了的时候） */
     function runFind(keep: boolean): void {
-        const pattern = findBar.hidden ? undefined : createFindPattern(findInput.value);
-        findSpans = pattern === undefined ? [] : matchSpans(body.value, pattern).slice(0, kMaxFindMatches);
-        showMatch(keep ? Math.min(findIndex, Math.max(0, findSpans.length - 1)) : 0, !keep);
+        findPattern = findBar.hidden ? undefined : createFindPattern(findInput.value);
+        findActive = undefined;
+        findSpans = [];
+        treeMatches = [];
+        if (findPattern !== undefined) {
+            if (bodyView === "tree") {
+                treeMatches =
+                    treeRoot === undefined ? [] : (findInJsonTree(treeRoot, findPattern, kMaxFindMatches) ?? []);
+            } else {
+                findSpans = matchSpans(body.value, findPattern).slice(0, kMaxFindMatches);
+            }
+        }
+        showMatch(keep ? Math.min(findIndex, Math.max(0, findTotal() - 1)) : 0, !keep);
+    }
+
+    /** 选中了一段（不跨行的）文字就拿它当查找词，和浏览器的习惯一样 */
+    function selectedText(): string {
+        if (bodyView === "source") {
+            return document.activeElement === body ? body.value.slice(body.selectionStart, body.selectionEnd) : "";
+        }
+        const selection = window.getSelection();
+        return selection !== null && selection.rangeCount > 0 && treeBox.contains(selection.anchorNode)
+            ? selection.toString()
+            : "";
     }
 
     function openFind(): void {
         onFindOpen(self);
-        // 编辑框里选中了一段（不跨行的）文字，就拿它当查找词，和浏览器的习惯一样
-        const selected = body.value.slice(body.selectionStart, body.selectionEnd);
-        if (document.activeElement === body && selected !== "" && !selected.includes("\n")) {
+        const selected = selectedText();
+        if (selected !== "" && !selected.includes("\n")) {
             findInput.value = selected;
         }
         findBar.hidden = false;
@@ -1044,7 +1198,7 @@ function createRuleCard(
         findBar.hidden = true;
         runFind(false);
         if (refocus) {
-            body.focus({ preventScroll: true });
+            (bodyView === "tree" ? treeBox : body).focus({ preventScroll: true });
         }
     }
 
@@ -1065,9 +1219,9 @@ function createRuleCard(
     });
 
     const bodyHead = el("div", "nri-rule-bodyhead");
-    bodyHead.append(el("span", "nri-rule-label", tr("Response body", "响应体")), findBtn, format);
+    bodyHead.append(el("span", "nri-rule-label", tr("Response body", "响应体")), findBtn, viewBtn, format);
 
-    card.append(head, settings, timing, presets, bodyHead, findBar, editor, errorLine, fixNote, note);
+    card.append(head, settings, timing, presets, bodyHead, findBar, editor, treeBox, errorLine, fixNote, note);
 
     function setValue(field: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, value: string): void {
         if ((forceSync || document.activeElement !== field) && field.value !== value) {
@@ -1101,11 +1255,21 @@ function createRuleCard(
             checkBody();
             fitHeight();
         }
+        if (bodyView === "tree" && treeOf !== rule.body) {
+            if (renderTree()) {
+                if (!findBar.hidden) {
+                    runFind(true);
+                }
+            } else {
+                setBodyView("source", false);
+            }
+        }
     }
 
     body.value = rule.body;
     checkBody();
     fitHeight();
+    paintViewBtn();
     sync(rule);
 
     const self: TRuleCard = { id: rule.id, el: card, sync, openFind, closeFind };

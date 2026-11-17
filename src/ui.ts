@@ -393,6 +393,10 @@ function ensurePanelStyle(): void {
         ${R} button:focus {
             outline: none !important;
         }
+        /* 面板本身可聚焦只是为了接住点在空白处、标题、URL 上的焦点，不显示焦点框 */
+        ${R} .nri-panel:focus {
+            outline: none;
+        }
         ${R} button:focus-visible {
             outline: none !important;
             box-shadow: 0 0 0 3px var(--nri-focus-ring);
@@ -2396,6 +2400,9 @@ export function mountPanel({
 
     const panel = document.createElement("div");
     panel.className = "nri-panel";
+    // 点面板里不可聚焦的地方（详情头、URL、空白处）时焦点落在面板上而不是 body，
+    // 否则按键事件到不了面板，⌘C 等快捷键会没反应
+    panel.tabIndex = -1;
     panel.setAttribute("role", "dialog");
     panel.setAttribute("aria-label", tr("Network Requests", "网络请求"));
 
@@ -2411,6 +2418,19 @@ export function mountPanel({
     /** 选中的请求，按列表顺序 */
     const selectedRecords = (): TNetworkRequestRecord[] =>
         visibleRecords.filter((record) => selection.ids.has(record.id));
+    /** 面板里有没有选中的文字。宿主页面上残留的选区不算：点请求行不会清掉它（行不可选中文字） */
+    const hasPanelTextSelection = (): boolean => {
+        const textSelection = window.getSelection();
+        if (textSelection === null || textSelection.isCollapsed || textSelection.toString() === "") {
+            return false;
+        }
+        for (let i = 0; i < textSelection.rangeCount; i += 1) {
+            if (panel.contains(textSelection.getRangeAt(i).commonAncestorContainer)) {
+                return true;
+            }
+        }
+        return false;
+    };
 
     // ---- 复制动作 ----
     const copyRecord = (record: TNetworkRequestRecord): void => {
@@ -4252,11 +4272,11 @@ export function mountPanel({
             clearAll();
         } else if (
             isCommandKey(event, "c") &&
-            (inList || inContent) &&
             selected.length > 0 &&
-            (window.getSelection()?.toString() ?? "") === ""
+            !isEditableTarget(event) &&
+            (inList || !hasPanelTextSelection())
         ) {
-            // 有选中文字时交给浏览器原生复制
+            // 焦点在面板里（输入框除外）就复制选中的请求；焦点不在列表上、且面板里选了文字时交给浏览器原生复制
             if (selected.length > 1) {
                 copyRecords(selected);
             } else {
