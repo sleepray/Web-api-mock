@@ -2480,6 +2480,14 @@ export function mountPanel({
             tr(`Copied ${records.length} requests and responses`, `已复制 ${records.length} 个请求和响应`),
         );
     };
+    /** ⌘C：选了几个请求就复制几个 */
+    const copySelection = (records: readonly TNetworkRequestRecord[]): void => {
+        if (records.length > 1) {
+            copyRecords(records);
+        } else if (records[0] !== undefined) {
+            copyRecord(records[0]);
+        }
+    };
     const copyCurls = (records: readonly TNetworkRequestRecord[]): void => {
         void copyWithToast(
             records.map(curlOf).join("\n\n"),
@@ -4216,6 +4224,55 @@ export function mountPanel({
         );
     };
 
+    // ---- 宿主页面弹窗的焦点锁定 ----
+    // 很多弹窗组件打开时会锁住焦点：焦点一离开弹窗（比如点进面板）就抢回去，于是面板收不到按键。
+    // 在 window 捕获阶段（先于页面的监听）把「焦点进入面板」和「页面元素把焦点交给面板」这两类事件拦下，
+    // 页面就察觉不到焦点离开了弹窗
+    const inRoot = (node: EventTarget | null): boolean => node instanceof Node && root.contains(node);
+    const shieldFocus = (event: Event): void => {
+        const { target } = event;
+        const related = event instanceof FocusEvent ? event.relatedTarget : null;
+        const entering = event.type === "focus" || event.type === "focusin";
+        if (entering ? inRoot(target) : !inRoot(target) && inRoot(related)) {
+            event.stopImmediatePropagation();
+        }
+    };
+    for (const type of ["focus", "focusin", "blur", "focusout"]) {
+        window.addEventListener(type, shieldFocus, { capture: true, signal });
+    }
+    // 兜底：焦点还是被抢走时，最后一次点的是面板就照样响应 ⌘C
+    let pointerInPanel = false;
+    window.addEventListener(
+        "pointerdown",
+        (event) => {
+            pointerInPanel = inRoot(event.target);
+        },
+        { capture: true, signal },
+    );
+    window.addEventListener(
+        "keydown",
+        (event) => {
+            if (
+                !pointerInPanel ||
+                collapsed ||
+                view !== "requests" ||
+                isContextMenuOpen() ||
+                inRoot(event.target) ||
+                !isCommandKey(event, "c")
+            ) {
+                return;
+            }
+            const selected = selectedRecords();
+            if (selected.length === 0 || hasPanelTextSelection()) {
+                return;
+            }
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            copySelection(selected);
+        },
+        { capture: true, signal },
+    );
+
     // ---- 键盘 ----
     panel.addEventListener("keydown", (event) => {
         if (isContextMenuOpen()) {
@@ -4277,11 +4334,7 @@ export function mountPanel({
             (inList || !hasPanelTextSelection())
         ) {
             // 焦点在面板里（输入框除外）就复制选中的请求；焦点不在列表上、且面板里选了文字时交给浏览器原生复制
-            if (selected.length > 1) {
-                copyRecords(selected);
-            } else {
-                copyRecord(selected[0]);
-            }
+            copySelection(selected);
         } else if (isCommandKey(event, "a") && inList) {
             select(selectAll(visibleIds(), selection), false);
         } else if (event.key === "Escape") {
